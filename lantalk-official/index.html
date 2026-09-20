@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LanTalk 云聊 · 局域网零依赖 / 云端可跨网，两种部署一套体验</title>
+<meta name="description" content="LanTalk 是一个自托管聊天工具：单文件零第三方依赖的局域网版（node LanTalk.html 即可跑），以及带邮箱登录、行级安全的云端版。已读回执、@提醒、建群、剪贴板截图直发，大厅里还有气氛组小美。">
+<meta name="theme-color" content="#08090b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="color-scheme" content="dark light">
+
+<!-- 关键 CSS 内联前先预连字体域（本项目全部使用系统字体，不引入外部字体请求，
+     这里保留 preconnect 位置说明：/font-display: swap 已由系统字体天然满足） -->
+<link rel="stylesheet" href="styles/tokens.css">
+<link rel="stylesheet" href="styles/base.css">
+<link rel="stylesheet" href="styles/components.css">
+
+<!-- 首屏关键样式内联：避免主题切换时闪白（FOUC） -->
+<script>
+  // 主题必须在首次绘制前决定：优先读用户选择，其次读系统外观
+  (function () {
+    try {
+      var saved = localStorage.getItem('lantalk-theme');
+      var sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = saved || (sysDark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) { /* 隐私模式下 localStorage 可能不可用，退回默认暗色 */ }
+  })();
+</script>
+</head>
+
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<!-- 氛围层：渐变网格 + 噪点颗粒（纯装饰，不进无障碍树） -->
+<div class="atmosphere" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<!-- ==========================================================================
+     顶部导航 —— Liquid Glass 的唯一合法位置
+     内容从它下方滚过并透出，形成控件层/内容层的层级关系
+     ========================================================================== -->
+<header class="site-header" id="siteHeader">
+  <div class="site-header__inner">
+    <a class="brand" href="#top" aria-label="LanTalk 云聊，返回顶部">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#04220d" stroke-width="2.6"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5h16v11H8l-4 4V5z"/>
+        </svg>
+      </span>
+      LanTalk
+    </a>
+
+    <nav class="site-nav" aria-label="页面导航">
+      <a href="#capability">能力</a>
+      <a href="#runtime">运行指标</a>
+      <a href="#bot">小美</a>
+      <a href="#deploy">部署</a>
+      <a href="#faq">常见问题</a>
+    </nav>
+
+    <div class="site-header__actions">
+      <button class="icon-btn theme-toggle" id="themeToggle" type="button"
+              aria-label="切换浅色与深色外观" aria-pressed="false" title="切换外观">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4.2"/>
+          <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4"/>
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/>
+        </svg>
+      </button>
+
+      <a class="btn btn--ghost btn--sm" href="#deploy">部署方式</a>
+      <a class="btn btn--primary btn--sm" href="https://lan-talk-v2.app.workbuddy.host/"
+         target="_blank" rel="noopener noreferrer">
+        打开云端版
+        <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M7 17 17 7M9 7h8v8"/>
+        </svg>
+      </a>
+
+      <button class="icon-btn nav-toggle" id="navToggle" type="button"
+              aria-label="展开导航菜单" aria-expanded="false" aria-controls="drawer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- 移动端抽屉：默认隐藏，与桌面导航共享同一组链接 -->
+<nav class="drawer" id="drawer" aria-label="移动端导航" aria-hidden="true">
+  <a href="#capability">能力</a>
+  <a href="#runtime">运行指标</a>
+  <a href="#bot">小美</a>
+  <a href="#deploy">部署</a>
+  <a href="#faq">常见问题</a>
+  <a class="btn btn--primary" href="https://lan-talk-v2.app.workbuddy.host/"
+     target="_blank" rel="noopener noreferrer">打开云端版</a>
+</nav>
+<div class="scrim" id="scrim" hidden></div>
+
+<main class="page" id="main">
+<a id="top"></a>
+
+<!-- ==========================================================================
+     首屏 —— 非对称双栏：左侧叙事，右侧是一个"正在工作的"会话窗口
+     记忆点：右侧那块真界面比任何插画都更能说明这是什么
+     ========================================================================== -->
+<section class="hero shell" aria-labelledby="hero-title">
+  <div class="hero__grid">
+    <div class="hero__copy">
+      <p class="hero__status reveal is-in">
+        <span class="brand__mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#04220d" stroke-width="2.8"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4V5z"/></svg>
+        </span>
+        <span class="pulse" aria-hidden="true"></span>
+        <span>v2 已上线 · 2026-09-20 更新</span>
+      </p>
+
+      <h1 class="display reveal is-in" id="hero-title">
+        一个文件，<br>把聊天室开起来。
+      </h1>
+
+      <p class="lede reveal is-in">
+        LanTalk 有两个版本：<strong class="strong">局域网版</strong>是一个 135&nbsp;KB 的 HTML 文件，
+        它既是网页也是服务器，<code class="mono">node LanTalk.html</code> 就跑起来，不需要
+        npm install、不需要数据库、不需要外网；<strong class="strong">云端版</strong>用邮箱登录，数据落在
+        云端 Postgres，跨网段、跨机器都能连上。
+      </p>
+
+      <div class="hero__actions reveal is-in">
+        <a class="btn btn--primary" href="#deploy">
+          三行命令跑起来
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h13M12 6l6 6-6 6"/>
+          </svg>
+        </a>
+        <a class="btn btn--ghost" href="#capability">先看看能干什么</a>
+      </div>
+
+      <!-- 事实清单：用等宽数字给可核对的硬数据，不用形容词 -->
+      <dl class="hero__facts reveal is-in">
+        <div class="hero__fact">
+          <dt>第三方依赖</dt>
+          <dd>0</dd>
+        </div>
+        <div class="hero__fact">
+          <dt>单文件体积</dt>
+          <dd>135 KB</dd>
+        </div>
+        <div class="hero__fact">
+          <dt>实时通道</dt>
+          <dd>WebSocket</dd>
+        </div>
+        <div class="hero__fact">
+          <dt>单文件上限</dt>
+          <dd>25 MB</dd>
+        </div>
+      </dl>
+    </div>
+
+    <!-- 右侧活体区域：真实界面截图级复刻，破格溢出右边界 -->
+    <div class="hero__stage reveal is-in">
+      <p class="stage__caption">
+        <span class="mono">localhost:3000</span>
+        <span aria-hidden="true">·</span>
+        <span>局域网版实际界面</span>
+      </p>
+
+      <figure class="stage">
+        <!-- 提示层：这是全局复用的 toast 组件，不是装饰 -->
+        <div class="stage__toast" id="stageToast" role="status" aria-live="polite">
+          <span aria-hidden="true">🌙</span><span id="stageToastText">已切换到深色主题</span>
+        </div>
+
+        <!-- 提示音波纹：@小美 时出现 -->
+        <div class="stage__wave" id="stageWave" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i>
+        </div>
+
+        <div class="window" role="img"
+             aria-label="LanTalk 局域网版界面示意：左侧是会话列表，包含大厅、与「阿哲」「小美」的私聊和「前端小组」群聊；右侧是大厅聊天区，展示了消息引用、@提醒、图片消息、文件消息、撤回提示与已读回执。">
+
+          <!-- 窗口标题栏 -->
+          <div class="window__bar" aria-hidden="true">
+            <span class="window__dots"><i></i><i></i><i></i></span>
+            <span class="window__title">LanTalk · 大厅</span>
+            <span class="window__badge"><span class="pulse"></span>已连接</span>
+          </div>
+
+          <!-- 会话列表 -->
+          <div class="window__side" aria-hidden="true">
+            <div class="window__search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   style="width:12px;height:12px"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>
+              搜索联系人
+            </div>
+
+            <div class="conv is-active">
+              <span class="conv__av">🏠</span>
+              <div style="min-width:0">
+                <div class="conv__nm">大厅</div>
+                <div class="conv__sub">小美：气氛组组长已到岗</div>
+              </div>
+              <span class="conv__dot"></span>
+            </div>
+
+            <div class="conv">
+              <span class="conv__av" style="background:#3d8bfd;color:#fff">阿</span>
+              <div style="min-width:0">
+                <div class="conv__nm">阿哲</div>
+                <div class="conv__sub">文档我放群文件了</div>
+              </div>
+            </div>
+
+            <div class="conv">
+              <span class="conv__av" style="background:#e0518f">美</span>
+              <div style="min-width:0">
+                <div class="conv__nm">小美</div>
+                <div class="conv__sub">在的！我在我一直都在</div>
+              </div>
+            </div>
+
+            <div class="conv">
+              <span class="conv__av" style="background:#8b5cf6;color:#fff">前</span>
+              <div style="min-width:0">
+                <div class="conv__nm">前端小组</div>
+                <div class="conv__sub">3/5 已读</div>
+              </div>
+              <span class="conv__dot" style="background:var(--text-tertiary)"></span>
+            </div>
+          </div>
+
+          <!-- 聊天主区 -->
+          <div class="window__main" aria-hidden="true">
+            <div class="window__head">
+              <span class="conv__av" style="background:var(--surface-strong)">🏠</span>
+              <span class="conv__nm">大厅</span>
+              <span class="conv__sub" style="color:var(--text-tertiary)">全员公共频道</span>
+              <span class="window__count">
+                <span class="pulse" style="width:6px;height:6px"></span>在线 8 人
+              </span>
+            </div>
+
+            <div class="thread" id="thread">
+              <div class="sys">「张工」更名为「张工·前端」</div>
+
+              <div class="msg">
+                <span class="conv__av" style="background:#3d8bfd;color:#fff">阿</span>
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">阿哲</span><span>09:12</span></div>
+                  <div class="bubble">局域网版真的零依赖？那我下班就搭一个试试。</div>
+                </div>
+              </div>
+
+              <div class="msg">
+                <span class="conv__av" style="background:var(--surface-strong)">🏠</span>
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">小美</span><span>09:12</span></div>
+                  <div class="bubble">真的呀～一个文件既是网页又是服务器，纯 Node 原生模块，装都不用装 🌸</div>
+                </div>
+              </div>
+
+              <!-- 图片消息：形态表达"这是截图直发" -->
+              <div class="msg">
+                <span class="conv__av" style="background:#3d8bfd;color:#fff">阿</span>
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">阿哲</span><span>09:13</span></div>
+                  <div class="bubble bubble--media" style="padding:6px">
+                    <div class="media">截图 · 直接 Ctrl+V 粘贴发送</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- @提醒：整条高亮 -->
+              <div class="msg msg--self msg--mention">
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">我</span><span>09:14</span></div>
+                  <div class="bubble">@小美 讲个笑话</div>
+                  <div class="msg__receipt">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"
+                         style="width:11px;height:11px" aria-hidden="true"><path d="m4 12.5 5 5L20 6.5"/></svg>
+                    已读
+                  </div>
+                </div>
+                <span class="conv__av" style="background:#30d158;color:#04220d">我</span>
+              </div>
+
+              <div class="msg">
+                <span class="conv__av" style="background:var(--surface-strong)">🏠</span>
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">小美</span><span>09:14</span></div>
+                  <div class="bubble">面试官：「你最大的缺点是什么？」我：「诚实。」面试官：「我不觉得诚实是缺点。」我：「我不在乎你怎么觉得。」😂</div>
+                </div>
+              </div>
+
+              <!-- 文件消息 -->
+              <div class="msg">
+                <span class="conv__av" style="background:#3d8bfd;color:#fff">阿</span>
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">阿哲</span><span>09:15</span></div>
+                  <div class="bubble" style="padding:6px">
+                    <div class="filecard">
+                      <span class="filecard__ico">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                             style="width:15px;height:15px"><path d="M14 3v5h5M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/></svg>
+                      </span>
+                      <div style="min-width:0">
+                        <div class="filecard__nm">部署说明.md</div>
+                        <div class="filecard__sz">18.4 KB</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 撤回态 -->
+              <div class="msg msg--revoked">
+                <span class="conv__av" style="background:var(--surface-strong);opacity:.5">阿</span>
+                <div class="msg__body">
+                  <div class="msg__meta"><span class="msg__who">阿哲</span><span>09:16</span></div>
+                  <div class="bubble">阿哲 撤回了一条消息</div>
+                </div>
+              </div>
+
+              <!-- 正在输入 -->
+              <div class="msg">
+                <span class="conv__av" style="background:#3d8bfd;color:#fff">阿</span>
+                <div class="msg__body">
+                  <div class="typing" role="status">
+                    <i></i><i></i><i></i>
+                    <span style="font-size:10.5px;color:var(--text-tertiary);margin-left:4px">阿哲正在输入…</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="composer">
+              <div class="composer__tools">
+                <span class="composer__tool" title="表情">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 10h.01M15 10h.01"/>
+                  </svg>
+                </span>
+                <span class="composer__tool" title="图片">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m3 16 5-5 5 5 3-3 5 5"/>
+                  </svg>
+                </span>
+                <span class="composer__tool" title="文件">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M21.4 11.05 12.25 20.2a5.5 5.5 0 0 1-7.78-7.78l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.83 1.83 0 0 1-2.6-2.6l8.5-8.5"/>
+                  </svg>
+                </span>
+                <span class="composer__tool" title="艾特某人">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>
+                  </svg>
+                </span>
+              </div>
+              <div class="composer__field">
+                <span>输入消息，Enter 发送，Shift+Enter 换行…</span>
+                <span class="composer__send" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                       stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- 能力跑马灯：补充密度，悬停暂停方便阅读 -->
+<div class="marquee" aria-hidden="true">
+  <div class="marquee__track" id="marqueeTrack">
+    <!-- 内容由脚本复制一份以实现无缝循环；此处为源数据 -->
+    <span class="marquee__item"><span class="mono">01</span>大厅公共频道</span>
+    <span class="marquee__item"><span class="mono">02</span>私聊 + 群聊</span>
+    <span class="marquee__item"><span class="mono">03</span>已读 / 未读回执</span>
+    <span class="marquee__item"><span class="mono">04</span>@某人 · @全体</span>
+    <span class="marquee__item"><span class="mono">05</span>Ctrl+V 截图直发</span>
+    <span class="marquee__item"><span class="mono">06</span>2 分钟内撤回</span>
+    <span class="marquee__item"><span class="mono">07</span>引用回复</span>
+    <span class="marquee__item"><span class="mono">08</span>正在输入提示</span>
+    <span class="marquee__item"><span class="mono">09</span>消息免打扰</span>
+    <span class="marquee__item"><span class="mono">10</span>跨会话消息搜索</span>
+    <span class="marquee__item"><span class="mono">11</span>断线自动重连</span>
+    <span class="marquee__item"><span class="mono">12</span>深色 / 浅色主题</span>
+  </div>
+</div>
+
+<!-- ==========================================================================
+     能力详解
+     ========================================================================== -->
+<section class="section shell" id="capability" aria-labelledby="capability-title">
+  <div class="section-head">
+    <div class="section-head__text">
+      <span class="eyebrow">能力 · Capability</span>
+      <h2 class="h1" id="capability-title">不是 demo，是一间能开工的聊天室</h2>
+      <p>
+        从身份到已读回执，从建群到 @全体，每一处都按日常办公的真实节奏做完了。
+        下面按"你每天会用到的动作"分组，而不是按技术模块。
+      </p>
+    </div>
+    <p class="section-head__aside">
+      功能对齐代码实现<br>
+      未经营销加工
+    </p>
+  </div>
+
+  <div class="cards">
+    <!-- 宽卡：聊天与消息，含能力对照表 -->
+    <article class="card card--wide reveal">
+      <span class="card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5h16v11H8l-4 4V5z"/><path d="M8 9h8M8 12.5h5"/>
+        </svg>
+      </span>
+      <h3 class="h3">聊天与消息</h3>
+      <p>四种消息类型全部落地，最常用的两个动作做成了零摩擦入口。</p>
+
+      <table class="spec">
+        <caption class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">
+          LanTalk 聊天能力与实现方式对照
+        </caption>
+        <tbody>
+          <tr>
+            <th scope="row">点大厅里任意头像</th>
+            <td>直接打开和那个人的私聊，不用先搜昵称</td>
+          </tr>
+          <tr>
+            <th scope="row">截图后 Ctrl+V</th>
+            <td>剪贴板里的图片自动上传并发送，不用先存文件</td>
+          </tr>
+          <tr>
+            <th scope="row">消息类型</th>
+            <td>文字 / 表情 / 图片 / 文件（≤25&nbsp;MB），支持引用回复与 2 分钟内撤回</td>
+          </tr>
+          <tr>
+            <th scope="row">@提醒</th>
+            <td>@某人 或 @全体成员：消息高亮 + 桌面通知 + 提示音 + 侧栏「[有人@我]」</td>
+          </tr>
+        </tbody>
+      </table>
+    </article>
+
+    <!-- 卡片：已读 -->
+    <article class="card reveal">
+      <span class="card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="m2 13 5 5L18 7"/><path d="m11 15.5 2.5 2.5L22 9"/>
+        </svg>
+      </span>
+      <h3 class="h3">已读看得见</h3>
+      <p>私聊每条自己的消息显示「已读 / 未读」；群聊最后一条显示「N/M 已读」，点开还能看是谁读了。</p>
+      <ul class="card__list">
+        <li><span class="mono">01</span>未读红点与标签页未读数</li>
+        <li><span class="mono">02</span>打开会话自动标记已读</li>
+        <li><span class="mono">03</span>支持只筛未读会话</li>
+      </ul>
+    </article>
+
+    <!-- 卡片：群聊 -->
+    <article class="card reveal">
+      <span class="card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/>
+          <path d="M16 6.5a3 3 0 0 1 0 5.8M17.5 20a6 6 0 0 0-2.2-4.3"/>
+        </svg>
+      </span>
+      <h3 class="h3">建群不用搜人</h3>
+      <p>点 ＋ 建群，弹窗里直接列出「大厅成员」，点一下就把人拉进来。群管理该有的都有。</p>
+      <ul class="card__list">
+        <li><span class="mono">01</span>邀请 / 踢人 / 退出 / 解散</li>
+        <li><span class="mono">02</span>改群名、群公告、群成员</li>
+        <li><span class="mono">03</span>消息免打扰</li>
+      </ul>
+    </article>
+
+    <!-- 卡片：身份 -->
+    <article class="card reveal">
+      <span class="card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4.5" width="18" height="15" rx="2.5"/>
+          <circle cx="9" cy="11" r="2.2"/><path d="M5.5 17a3.8 3.8 0 0 1 7 0M14.5 10h4M14.5 13.5h3"/>
+        </svg>
+      </span>
+      <h3 class="h3">一台机器一个身份</h3>
+      <p>局域网版按内网 IP 认人：第一次输昵称，之后打开直接进；换昵称等于改名，历史消息里的名字跟着更新。</p>
+      <ul class="card__list">
+        <li><span class="mono">01</span>昵称全服唯一校验</li>
+        <li><span class="mono">02</span>48 个表情头像 / 首字头像</li>
+        <li><span class="mono">03</span>可关闭绑定，退回浏览器独立昵称</li>
+      </ul>
+    </article>
+
+    <!-- 卡片：跨天不变 -->
+    <article class="card card--half reveal">
+      <span class="card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/>
+          <path d="m8.5 15.5 2 2 4.5-4.5"/>
+        </svg>
+      </span>
+      <h3 class="h3">身份在，记录就在</h3>
+      <p>身份绑在 IP 上，换浏览器、清缓存都不会丢；云端版更进一步——数据始终在云端，重装机器也只是重新登录。</p>
+      <div class="mini-cal">
+        <div><span>换浏览器</span><b>直接进</b></div>
+        <div><span>清掉缓存</span><b>直接进</b></div>
+        <div class="is-hi"><span>换昵称</span><b>改名</b></div>
+        <div><span>删掉 IP 条目</span><b>重新输入</b></div>
+      </div>
+    </article>
+
+    <!-- 卡片：可靠 -->
+    <article class="card card--half reveal">
+      <span class="card__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3 4 6v6c0 5 3.4 8.3 8 9.5 4.6-1.2 8-4.5 8-9.5V6z"/>
+          <path d="m9 12 2 2 4-4"/>
+        </svg>
+      </span>
+      <h3 class="h3">掉电也不丢数据</h3>
+      <p>数据落在本地 JSON 文件，采用原子写入——掉电不会写坏；备份就是拷一个目录，删掉某个 IP 的条目，那台机器下次会重新要求输入昵称。</p>
+      <ul class="card__list">
+        <li><span class="mono">01</span>data/db.json 原子写入</li>
+        <li><span class="mono">02</span>data/files/ 存图片与文件</li>
+        <li><span class="mono">03</span>WebSocket 断线自动重连</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<!-- ==========================================================================
+     运行指标 —— 可直接核对的技术事实
+     ========================================================================== -->
+<section class="section section--tight shell" id="runtime" aria-labelledby="runtime-title">
+  <div class="section-head">
+    <div class="section-head__text">
+      <span class="eyebrow">运行指标 · Runtime</span>
+      <h2 class="h1" id="runtime-title">这些数字都能自己验</h2>
+      <p>下面每一项都对应仓库里一个可执行的事实，不是宣传口径。</p>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat reveal">
+      <span class="stat__num" data-count="0">0</span>
+      <span class="stat__label">第三方依赖</span>
+      <span class="stat__note">服务端与前端全用 Node 原生模块与浏览器 API</span>
+    </div>
+    <div class="stat reveal">
+      <span class="stat__num" data-count="135">135<sup>KB</sup></span>
+      <span class="stat__label">主文件体积</span>
+      <span class="stat__note">单文件里同时装着服务端与前端页面</span>
+    </div>
+    <div class="stat reveal">
+      <span class="stat__num" data-count="6">6</span>
+      <span class="stat__label">云端数据表</span>
+      <span class="stat__note">profiles / groups / group_members / messages / reads / friends</span>
+    </div>
+    <div class="stat reveal">
+      <span class="stat__num" data-count="23">23</span>
+      <span class="stat__label">条行级安全策略</span>
+      <span class="stat__note">配套 2 个 SECURITY DEFINER 函数做跨用户鉴权</span>
+    </div>
+  </div>
+
+  <p class="footnote" style="margin-top:var(--space-5);max-width:var(--measure)">
+    局域网版自测：<code class="mono">node LanTalk/test/smoke.js</code>（后端 29 项，零依赖）与
+    <code class="mono">node LanTalk/test/ui-check.js</code>（前端运行时 14 项）。
+    云端版冒烟：<code class="mono">node cloud/test-load.js</code>。
+  </p>
+</section>
+
+<!-- ==========================================================================
+     小美 —— 趣味模块，用对话而不是一段产品文案来介绍
+     ========================================================================== -->
+<section class="section shell" id="bot" aria-labelledby="bot-title">
+  <div class="bot">
+    <div class="reveal">
+      <span class="eyebrow">气氛组 · The Roommate</span>
+      <h2 class="h1" id="bot-title" style="margin-top:var(--space-4)">
+        大厅里还有一个人，24 小时在线
+      </h2>
+      <p class="lede" style="margin-top:var(--space-5)">
+        「小美」不是自动回复机器人，是常驻大厅的气氛组组长。
+        她会自己找话头、被 @ 就接话，还会讲笑话、念古诗、查天气、看新闻。
+        她由服务端代发——所有客户端只接收，所以不会每个浏览器各说一份。
+      </p>
+
+      <div class="bot__id" style="margin-top:var(--space-6)">
+        <span class="bot__av" aria-hidden="true" style="background:#e0518f;color:#fff">美</span>
+        <div>
+          <div class="bot__nm">小美</div>
+          <div class="bot__sig">气氛组组长 · @我我就说话</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧：用真实对话呈现技能，比列清单更有说服力。
+         结构与首屏窗口一致：self 消息靠右，小美回复靠左。
+         头像用「昵称首字 + 专属色」（产品自身对无表情头像的回退方案，全平台可渲染）。 -->
+    <div class="reveal">
+      <div class="msg msg--self msg--lg" style="opacity:1;transform:none;max-width:100%">
+        <div class="msg__body">
+          <div class="msg__meta"><span class="msg__who">我</span><span>刚刚</span></div>
+          <div class="bubble">@小美 你能干什么</div>
+        </div>
+        <span class="conv__av" aria-hidden="true" style="background:#30d158;color:#04220d">我</span>
+      </div>
+
+      <div class="msg msg--lg" style="opacity:1;transform:none;max-width:100%;margin-top:var(--space-4)">
+        <span class="conv__av" aria-hidden="true" style="background:#e0518f;color:#fff">美</span>
+        <div class="msg__body">
+          <div class="msg__meta"><span class="msg__who">小美</span><span>刚刚</span></div>
+          <div class="bubble">
+            本小姐会的可多啦，回复序号直接体验 ✨<br>
+            1 · 讲个笑话<br>
+            2 · 讲个故事<br>
+            3 · 念首古诗<br>
+            4 · 查天气<br>
+            5 · 看新闻<br>
+            6 · 今日热点<br>
+            <span style="color:var(--text-tertiary)">（菜单 5 分钟内有效，直接发数字就行）</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="bot__skills">
+        <div class="skill"><b>01</b><span>讲个笑话</span></div>
+        <div class="skill"><b>02</b><span>讲个故事</span></div>
+        <div class="skill"><b>03</b><span>念首古诗</span></div>
+        <div class="skill"><b>04</b><span>查天气</span></div>
+        <div class="skill"><b>05</b><span>看新闻</span></div>
+        <div class="skill"><b>06</b><span>今日热点</span></div>
+      </div>
+
+      <p class="footnote" style="margin-top:var(--space-5)">
+        查天气走 Open-Meteo，新闻与热点走多个公益接口轮询，全挂了会诚实告诉你"今天打不通"。
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ==========================================================================
+     部署 —— 两种方式对照，命令可直接复制
+     ========================================================================== -->
+<section class="section shell" id="deploy" aria-labelledby="deploy-title">
+  <div class="section-head">
+    <div class="section-head__text">
+      <span class="eyebrow">部署 · Deploy</span>
+      <h2 class="h1" id="deploy-title">选一种，三行以内起来</h2>
+      <p>要数据不出内网就选局域网版；要跨网段、换机器不丢数据就选云端版。两者账号数据不互通。</p>
+    </div>
+  </div>
+
+  <div class="deploy">
+    <!-- 局域网版 -->
+    <article class="panel panel--featured reveal">
+      <span class="panel__idx" aria-hidden="true">01</span>
+      <span class="panel__tag">局域网版 · 推荐自托管</span>
+      <h3 class="h2">一个文件，一个命令</h3>
+      <p>
+        零第三方依赖，纯 Node 原生模块跑起来。同一局域网里任意电脑和手机，
+        浏览器打开 <code class="mono">http://&lt;服务器IP&gt;:3000</code> 就能用，不需要装客户端。
+      </p>
+
+      <div class="term">
+        <div class="term__bar">
+          <span>bash · 局域网版</span>
+          <button class="term__copy" type="button" data-copy="node LanTalk.html">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2.5"/>
+              <path d="M15 5.5A2.5 2.5 0 0 0 12.5 3h-7A2.5 2.5 0 0 0 3 5.5v7A2.5 2.5 0 0 0 5.5 15"/>
+            </svg>
+            <span class="term__copy-label">复制</span>
+          </button>
+        </div>
+        <code class="term__code"><span class="c"># 默认 3000 端口，前台运行 Ctrl+C 停止</span>
+<span class="k">node</span> LanTalk.html
+
+<span class="c"># 换端口 / 换数据目录</span>
+<span class="k">PORT</span>=8080 <span class="k">LANCHAT_DATA</span>=/data/lantalk node LanTalk.html</code>
+      </div>
+
+      <ul class="card__list">
+        <li><span class="mono">·</span>Node.js 16+，无需 npm install</li>
+        <li><span class="mono">·</span>数据在 <code>data/</code>，备份就是拷目录</li>
+        <li><span class="mono">·</span>提供 systemd 自启与防火墙放行说明</li>
+      </ul>
+
+      <div class="panel__links">
+        <a class="btn btn--primary" href="https://lan-talk-v2.app.workbuddy.host/"
+           target="_blank" rel="noopener noreferrer">
+          先在线看看云端版
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 17 17 7M9 7h8v8"/>
+          </svg>
+        </a>
+      </div>
+    </article>
+
+    <!-- 云端版 -->
+    <article class="panel reveal">
+      <span class="panel__idx" aria-hidden="true">02</span>
+      <span class="panel__tag">云端版 · 有网就能用</span>
+      <h3 class="h2">邮箱登录，数据不丢</h3>
+      <p>
+        数据落在云端 Postgres 加对象存储，6 张表全部开启行级安全。
+        换机器、重装系统都只是重新登录一次，历史消息始终在。
+      </p>
+
+      <table class="spec">
+        <tbody>
+          <tr>
+            <th scope="row">身份</th>
+            <td>邮箱登录（验证码 / 密码）</td>
+          </tr>
+          <tr>
+            <th scope="row">实时性</th>
+            <td>轮询拉取，约 2.5 秒一轮</td>
+          </tr>
+          <tr>
+            <th scope="row">适用范围</th>
+            <td>有网就能用，可跨网段、跨机器</td>
+          </tr>
+          <tr>
+            <th scope="row">附件</th>
+            <td>存对象存储，展示时换取 10 分钟有效的签名 URL</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="panel__links">
+        <a class="btn btn--primary" href="https://lan-talk-v2.app.workbuddy.host/"
+           target="_blank" rel="noopener noreferrer">
+          新版（最新改动）
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M7 17 17 7M9 7h8v8"/>
+          </svg>
+        </a>
+        <a class="btn btn--ghost" href="https://lan-talk.app.workbuddy.host/"
+           target="_blank" rel="noopener noreferrer">
+          旧版（原数据）
+        </a>
+      </div>
+
+      <p class="footnote" style="margin-top:var(--space-4)">
+        两个环境相互独立，账号数据不互通。
+      </p>
+    </article>
+  </div>
+</section>
+
+<!-- ==========================================================================
+     常见问题 —— 用原生 details，键盘可达、零 JS
+     ========================================================================== -->
+<section class="section shell" id="faq" aria-labelledby="faq-title">
+  <div class="section-head">
+    <div class="section-head__text">
+      <span class="eyebrow">常见问题 · FAQ</span>
+      <h2 class="h1" id="faq-title">踩过的坑，都写在这了</h2>
+    </div>
+  </div>
+
+  <div class="faq">
+    <details class="reveal">
+      <summary>同事打不开页面怎么办？</summary>
+      <div class="faq__body">
+        按顺序查三件事：防火墙是否放行了端口（<code>sudo ufw allow 3000/tcp</code>）；两台机器是否在同一网段；
+        在服务器本机执行 <code>curl http://服务器IP:3000</code> 自测能否通。
+        部署在 nginx 等反向代理后面时，要设 <code>LANCHAT_TRUST_PROXY=1</code>，
+        否则识别到的是代理 IP，所有人会共用同一个身份。
+      </div>
+    </details>
+
+    <details class="reveal">
+      <summary>脚本报 bad interpreter 或者出现 ^M 是怎么回事？</summary>
+      <div class="faq__body">
+        从 Windows 拷过去的文件带了 <code>CRLF</code> 换行符。执行
+        <code>sed -i 's/\r$//' start.sh stop.sh</code> 把换行符转回 <code>LF</code> 即可。
+      </div>
+    </details>
+
+    <details class="reveal">
+      <summary>怎么改自己的昵称？会不会变成第二个人？</summary>
+      <div class="faq__body">
+        点左上角自己的头像进「我的资料」改，或者在进入页填新昵称，两种方式都是
+        <strong class="strong">把原来的身份改名</strong>，不会多出一个用户。
+        大厅会提示「A 更名为 B」，历史消息里的名字也会一起更新。
+      </div>
+    </details>
+
+    <details class="reveal">
+      <summary>云端版为什么不能在本地用 file:// 打开？</summary>
+      <div class="faq__body">
+        云端 SDK 只在应用自己的 HTTPS 域名下工作，用 <code>file://</code> 或
+        <code>localhost</code> 打开会被源校验拒绝。所以云端版必须发布到线上才能真实预览——
+        这也正是它和局域网版的根本差别。
+      </div>
+    </details>
+
+    <details class="reveal">
+      <summary>跑测试报 Cannot find module 'jsdom'？</summary>
+      <div class="faq__body">
+        主程序是零依赖的，只有前端运行时测试需要 <code>jsdom</code>。
+        在包根目录执行一次 <code>npm install</code> 即可，它不会被主程序引用。
+      </div>
+    </details>
+
+    <details class="reveal">
+      <summary>数据存在哪，怎么备份？</summary>
+      <div class="faq__body">
+        局域网版全部数据在 <code>LanTalk/data/</code>（可用 <code>LANCHAT_DATA</code> 改位置），
+        <code>db.json</code> 采用原子写入，掉电不会损坏，备份直接拷这个目录。
+        IP 与用户的对应关系在 <code>db.json</code> 的 <code>ips</code> 字段里，
+        删掉某个 IP 的条目，那台机器下次就会重新要求输入昵称。
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ==========================================================================
+     结尾行动区
+     ========================================================================== -->
+<section class="shell" aria-labelledby="cta-title">
+  <div class="cta reveal">
+    <h2 class="h1" id="cta-title">把聊天室开在你的机器上</h2>
+    <p>
+      一行命令，一个文件，一间只在你们局域网里存在的聊天室。
+      需要跨网段就把数据交给云端版，两种都能用同一套界面。
+    </p>
+    <div class="hero__actions">
+      <a class="btn btn--primary" href="https://lan-talk-v2.app.workbuddy.host/"
+         target="_blank" rel="noopener noreferrer">
+        打开云端版
+        <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M7 17 17 7M9 7h8v8"/>
+        </svg>
+      </a>
+      <a class="btn btn--ghost" href="#deploy">查看部署命令</a>
+    </div>
+  </div>
+</section>
+
+<!-- ==========================================================================
+     页脚
+     ========================================================================== -->
+<footer class="site-footer">
+  <div class="shell">
+    <div class="site-footer__grid">
+      <div class="site-footer__brand">
+        <a class="brand" href="#top">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#04220d" stroke-width="2.6"
+                 stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4V5z"/></svg>
+          </span>
+          LanTalk 云聊
+        </a>
+        <p>
+          自托管聊天工具。局域网版单文件零依赖，云端版邮箱登录、行级安全。
+          界面与文案对齐代码实现，不做营销加工。
+        </p>
+      </div>
+
+      <div>
+        <h4>页面</h4>
+        <ul>
+          <li><a href="#capability">能力</a></li>
+          <li><a href="#runtime">运行指标</a></li>
+          <li><a href="#bot">小美</a></li>
+          <li><a href="#deploy">部署</a></li>
+          <li><a href="#faq">常见问题</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>环境</h4>
+        <ul>
+          <li>
+            <a href="https://lan-talk-v2.app.workbuddy.host/" target="_blank" rel="noopener noreferrer">
+              云端版 v2（最新）
+            </a>
+          </li>
+          <li>
+            <a href="https://lan-talk.app.workbuddy.host/" target="_blank" rel="noopener noreferrer">
+              云端版（原数据）
+            </a>
+          </li>
+          <li><a href="#deploy">局域网版</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="site-footer__bottom">
+      <span>LanTalk · 自托管聊天工具</span>
+      <span class="mono">Node.js 16+ · 零第三方依赖 · WebSocket 实时通道</span>
+    </div>
+  </div>
+</footer>
+
+</main>
+
+<script src="scripts/main.js" defer></script>
+</body>
+</html>

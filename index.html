@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LanTalk — 聊天，不必出内网</title>
+<meta name="description" content="LanTalk 是一条命令就能跑起来的局域网聊天服务。消息、图片与文件都留在你自己的机器上，不经过任何第三方。">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="LanTalk/public/icon.svg">
+<style>
+/* ============================================================
+   Design tokens
+   品牌色沿用主程序 --brand:#07c160
+   绿色文字单独取加深/提亮变体，确保 WCAG AA 对比度达标
+   ============================================================ */
+:root{
+  --brand:#07c160;          /* 品牌绿，仅用于填充 */
+  --brand-ink:#05301a;      /* 绿底上的文字（6.9:1） */
+  --brand-text:#046b34;     /* 白底上的绿色文字（~5:1） */
+  --brand-soft:rgba(7,193,96,.12);
+
+  --bg:#ffffff;
+  --bg-sub:#f5f5f7;
+  --tx:#1d1d1f;
+  --tx-2:#6e6e73;
+  --line:rgba(0,0,0,.09);
+  --card:#ffffff;
+  --card-line:rgba(0,0,0,.07);
+  --nav-bg:rgba(255,255,255,.72);
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 26px rgba(0,0,0,.05);
+  --shadow-hi:0 2px 5px rgba(0,0,0,.05),0 18px 44px rgba(0,0,0,.09);
+
+  --max:1080px;
+  --r:22px;
+  --pill:980px;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+
+@media (prefers-color-scheme:dark){
+  :root{
+    --brand-ink:#04331a;
+    --brand-text:#2fd67f;
+    --brand-soft:rgba(7,193,96,.18);
+
+    --bg:#000000;
+    --bg-sub:#16181d;
+    --tx:#f5f5f7;
+    --tx-2:#a1a1a6;
+    --line:rgba(255,255,255,.13);
+    --card:#1c1c1e;
+    --card-line:rgba(255,255,255,.1);
+    --nav-bg:rgba(22,22,24,.72);
+    --shadow:0 1px 2px rgba(0,0,0,.5),0 8px 26px rgba(0,0,0,.42);
+    --shadow-hi:0 2px 5px rgba(0,0,0,.55),0 18px 44px rgba(0,0,0,.5);
+  }
+}
+
+*,*::before,*::after{box-sizing:border-box}
+
+html{-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion:no-preference){
+  html{scroll-behavior:smooth}
+}
+
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",
+              "PingFang SC","Hiragino Sans GB","Microsoft YaHei",
+              "Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-size:17px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  letter-spacing:-.005em;
+}
+
+.wrap{max-width:var(--max);margin:0 auto;padding:0 22px}
+
+code,.mono{
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  font-size:.9em;
+}
+
+/* ============================================================
+   Nav — 毛玻璃控件层（材质只用在控件层，不进内容层）
+   ============================================================ */
+nav{
+  position:sticky;top:0;z-index:50;
+  background:var(--nav-bg);
+  -webkit-backdrop-filter:blur(20px) saturate(180%);
+  backdrop-filter:blur(20px) saturate(180%);
+  border-bottom:1px solid transparent;
+  transition:border-color .3s ease;
+}
+nav.scrolled{border-bottom-color:var(--line)}
+
+.nav-in{
+  max-width:var(--max);margin:0 auto;padding:0 22px;
+  height:52px;display:flex;align-items:center;justify-content:space-between;
+}
+
+.brand{
+  display:flex;align-items:center;gap:9px;
+  font-size:17px;font-weight:600;letter-spacing:-.02em;
+  color:var(--tx);text-decoration:none;
+}
+.brand img{display:block;border-radius:7px}
+
+.nav-link{
+  display:inline-flex;align-items:center;
+  min-height:44px;padding:0 4px;
+  font-size:16px;font-weight:500;letter-spacing:-.01em;
+  color:var(--tx-2);text-decoration:none;
+  transition:color .2s ease;
+}
+.nav-link:hover{color:var(--tx)}
+
+/* ============================================================
+   Hero
+   ============================================================ */
+.hero{
+  position:relative;isolation:isolate;
+  text-align:center;
+  padding:clamp(88px,13vh,168px) 22px clamp(76px,10vh,124px);
+  overflow:hidden;
+}
+.hero::before{
+  content:"";position:absolute;z-index:-1;pointer-events:none;
+  left:50%;top:-180px;width:920px;height:640px;
+  transform:translateX(-50%);
+  background:radial-gradient(50% 50% at 50% 50%,rgba(7,193,96,.15),rgba(7,193,96,0) 70%);
+  filter:blur(28px);
+}
+@media (prefers-color-scheme:dark){
+  .hero::before{
+    background:radial-gradient(50% 50% at 50% 50%,rgba(7,193,96,.22),rgba(7,193,96,0) 70%);
+  }
+}
+@media (prefers-reduced-transparency:reduce){
+  nav{background:var(--bg);-webkit-backdrop-filter:none;backdrop-filter:none}
+  .hero::before{display:none}
+}
+
+.hero h1{
+  margin:0;
+  font-size:clamp(2.6rem,7.4vw,4.75rem);
+  font-weight:600;
+  line-height:1.04;
+  letter-spacing:-.035em;
+  text-wrap:balance;
+}
+
+.hero .sub{
+  margin:26px auto 0;
+  max-width:600px;
+  font-size:clamp(1.15rem,2.1vw,1.375rem);
+  line-height:1.5;
+  letter-spacing:-.01em;
+  color:var(--tx-2);
+  text-wrap:pretty;
+}
+
+.actions{
+  margin-top:40px;
+  display:flex;align-items:center;justify-content:center;
+  gap:14px 30px;flex-wrap:wrap;
+}
+
+/* 主按钮：绿底 + 深墨绿文字 —— 对比度 6.9:1 */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  min-height:52px;padding:0 32px;
+  border:0;border-radius:var(--pill);
+  background:var(--brand);color:var(--brand-ink);
+  font:inherit;font-size:17px;font-weight:600;letter-spacing:-.012em;
+  text-decoration:none;cursor:pointer;
+  transition:transform .18s var(--ease),background .2s ease;
+}
+.btn:hover{background:#06b45a}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible{outline:3px solid rgba(7,193,96,.5);outline-offset:3px}
+
+/* 次链接：苹果风的「文字 + chevron」 */
+.link{
+  display:inline-flex;align-items:center;gap:6px;
+  min-height:52px;padding:0 4px;
+  color:var(--brand-text);
+  font-size:17px;font-weight:500;letter-spacing:-.012em;
+  text-decoration:none;
+}
+.link svg{flex:none;transition:transform .28s var(--ease)}
+.link:hover{text-decoration:underline;text-underline-offset:4px}
+.link:hover svg{transform:translateX(4px)}
+.link:focus-visible{outline:3px solid rgba(7,193,96,.5);outline-offset:3px;border-radius:6px}
+
+/* 命令行胶囊 */
+.cmd{
+  display:inline-flex;align-items:center;gap:11px;
+  margin-top:44px;
+  padding:12px 20px;
+  background:var(--bg-sub);
+  border:1px solid var(--line);
+  border-radius:14px;
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  font-size:15px;letter-spacing:0;
+  color:var(--tx);
+}
+.cmd .prompt{color:var(--brand-text);user-select:none}
+.cmd.sm{margin-top:0;padding:10px 16px;font-size:14px;border-radius:12px}
+
+/* ============================================================
+   Features
+   ============================================================ */
+.features{padding:clamp(72px,10vh,132px) 22px}
+.features h2{
+  margin:0;
+  font-size:clamp(1.875rem,3.8vw,2.75rem);
+  font-weight:600;line-height:1.12;letter-spacing:-.028em;
+  text-wrap:balance;
+}
+.features .grid{
+  margin-top:clamp(44px,6vh,64px);
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:52px 48px;
+}
+.feature h3{
+  display:flex;align-items:center;gap:10px;
+  margin:0 0 11px;
+  font-size:21px;font-weight:600;letter-spacing:-.018em;
+}
+.feature h3::before{
+  content:"";flex:none;
+  width:7px;height:7px;border-radius:50%;background:var(--brand);
+}
+.feature p{
+  margin:0;
+  font-size:17px;line-height:1.55;letter-spacing:-.005em;
+  color:var(--tx-2);text-wrap:pretty;
+}
+.feature code{
+  background:var(--bg-sub);border:1px solid var(--line);
+  border-radius:6px;padding:.1em .38em;color:var(--tx);
+}
+
+/* ============================================================
+   Editions
+   ============================================================ */
+.editions{
+  padding:clamp(72px,10vh,132px) 22px;
+  background:var(--bg-sub);
+}
+.editions h2{
+  margin:0;
+  font-size:clamp(1.875rem,3.8vw,2.75rem);
+  font-weight:600;line-height:1.12;letter-spacing:-.028em;
+  text-wrap:balance;
+}
+.editions .grid2{
+  margin-top:clamp(40px,5.5vh,56px);
+  display:grid;grid-template-columns:repeat(2,1fr);gap:20px;
+}
+
+.edition{
+  background:var(--card);
+  border:1px solid var(--card-line);
+  border-radius:var(--r);
+  padding:36px 32px 34px;
+  box-shadow:var(--shadow);
+  transition:transform .38s var(--ease),box-shadow .38s var(--ease);
+}
+.edition:hover{transform:translateY(-3px);box-shadow:var(--shadow-hi)}
+
+.badge{
+  display:inline-block;margin-bottom:20px;
+  padding:5px 12px;border-radius:var(--pill);
+  background:var(--brand-soft);color:var(--brand-text);
+  font-size:13px;font-weight:600;letter-spacing:.01em;
+}
+.edition h3{
+  margin:0 0 12px;
+  font-size:22px;font-weight:600;letter-spacing:-.02em;
+}
+.edition p{
+  margin:0 0 26px;
+  font-size:17px;line-height:1.55;letter-spacing:-.005em;
+  color:var(--tx-2);text-wrap:pretty;
+}
+.edition .link{min-height:44px;font-size:16px}
+
+/* ============================================================
+   Footer
+   ============================================================ */
+footer{border-top:1px solid var(--line);padding:40px 0}
+.foot{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:18px;flex-wrap:wrap;
+}
+.foot-brand{
+  display:flex;align-items:center;gap:9px;
+  font-size:14px;color:var(--tx-2);
+}
+.foot-brand img{display:block;border-radius:5px}
+.foot-brand b{font-weight:600;color:var(--tx)}
+footer a{
+  color:var(--tx-2);text-decoration:none;
+  font-size:14px;
+  transition:color .2s ease;
+}
+footer a:hover{color:var(--tx);text-decoration:underline;text-underline-offset:4px}
+
+/* ============================================================
+   Reveal on scroll
+   ============================================================ */
+.reveal{
+  opacity:0;transform:translateY(18px);
+  transition:opacity .72s var(--ease),transform .72s var(--ease);
+}
+.reveal.in{opacity:1;transform:none}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+@media (max-width:820px){
+  .features .grid{grid-template-columns:1fr;gap:42px}
+  .editions .grid2{grid-template-columns:1fr}
+  .edition{padding:30px 26px}
+  .foot{flex-direction:column;align-items:flex-start;gap:14px}
+}
+
+/* ============================================================
+   Reduced motion — 位移动画改交叉淡化，控件不做缩放
+   ============================================================ */
+@media (prefers-reduced-motion:reduce){
+  .reveal{opacity:1;transform:none;transition:none}
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+  }
+  .btn:active{transform:none}
+  .edition:hover{transform:none}
+}
+
+/* 高对比度偏好 */
+@media (prefers-contrast:more){
+  :root{--line:rgba(0,0,0,.3);--card-line:rgba(0,0,0,.3);--tx-2:#48484a}
+  .edition{border-width:1.5px}
+  .btn{border:2px solid var(--tx)}
+}
+</style>
+</head>
+<body id="top">
+
+<nav>
+  <div class="nav-in">
+    <a class="brand" href="#top">
+      <img src="LanTalk/public/icon.svg" alt="LanTalk" width="26" height="26">
+      <span>LanTalk</span>
+    </a>
+    <a class="nav-link" href="https://github.com/zjh12580/lantalk" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</nav>
+
+<main>
+
+  <section class="hero">
+    <h1>聊天，不必出内网。</h1>
+    <p class="sub">LanTalk 是一条命令就能跑起来的局域网聊天服务。消息、图片与文件都留在你自己的机器上，不经过任何第三方。</p>
+    <div class="actions">
+      <a class="btn" href="#start">开始使用</a>
+      <a class="link" href="https://github.com/zjh12580/lantalk" target="_blank" rel="noopener">
+        在 GitHub 上查看
+        <svg width="7" height="12" viewBox="0 0 7 12" fill="none" aria-hidden="true"><path d="M1 1l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+    <div class="cmd"><span class="prompt">$</span><span>node LanTalk.html</span></div>
+  </section>
+
+  <section class="features">
+    <div class="wrap reveal">
+      <h2>为什么是 LanTalk</h2>
+      <div class="grid">
+        <div class="feature">
+          <h3>零依赖</h3>
+          <p>单个 HTML 文件既是网页也是服务器。不需要安装依赖，不需要数据库，也不需要外网。</p>
+        </div>
+        <div class="feature">
+          <h3>数据自持</h3>
+          <p>消息与文件存在同目录的 <code>data/</code> 里，原子写入不怕掉电。备份就是拷一个文件夹。</p>
+        </div>
+        <div class="feature">
+          <h3>开箱即用</h3>
+          <p>大厅、私聊、群聊，已读回执、@提醒、文件传输、截图粘贴发送——进来说话就行。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="editions" id="start">
+    <div class="wrap reveal">
+      <h2>两种版本，按需选用</h2>
+      <div class="grid2">
+        <article class="edition">
+          <div class="badge">局域网版</div>
+          <h3>一条命令，同网即可</h3>
+          <p>在任意一台机器上运行，同一局域网内的电脑与手机打开链接就能聊。数据全部留在本机。</p>
+          <div class="cmd sm"><span class="prompt">$</span><span>node LanTalk.html</span></div>
+        </article>
+        <article class="edition">
+          <div class="badge">云端版</div>
+          <h3>有网就能用</h3>
+          <p>邮箱验证码登录，数据存在云端。跨网段、换设备都不受影响，适合不在同一个网络的成员。</p>
+          <a class="link" href="https://lan-talk-v2.app.workbuddy.host/" target="_blank" rel="noopener">
+            打开云端版
+            <svg width="7" height="12" viewBox="0 0 7 12" fill="none" aria-hidden="true"><path d="M1 1l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </article>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div class="foot-brand">
+      <img src="LanTalk/public/icon.svg" alt="" width="20" height="20">
+      <b>LanTalk</b>
+      <span>·</span>
+      <span>MIT License</span>
+    </div>
+    <a href="https://github.com/zjh12580/lantalk" target="_blank" rel="noopener">github.com/zjh12580/lantalk</a>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var items = document.querySelectorAll('.reveal');
+
+  if (reduce || !('IntersectionObserver' in window)) {
+    Array.prototype.forEach.call(items, function(el){ el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    Array.prototype.forEach.call(items, function(el){ io.observe(el); });
+  }
+
+  var nav = document.querySelector('nav');
+  function onScroll(){ nav.classList.toggle('scrolled', window.scrollY > 8); }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+
+</body>
+</html>
