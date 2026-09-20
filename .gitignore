@@ -10,6 +10,7 @@
 # 依赖与运行时数据
 node_modules/
 LanTalk/data/
+data/
 *.log
 
 # 系统文件

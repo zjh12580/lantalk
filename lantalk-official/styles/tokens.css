@@ -1,0 +1,224 @@
+/* ============================================================================
+   LanTalk 官方首页 · 设计令牌层 (Design Tokens)
+   ----------------------------------------------------------------------------
+   来源规范：Apple HIG（Design Principles / Color / Typography / Layout /
+   Materials / Accessibility）+ frontend-design 反 AI 味检查表。
+
+   主题策略：单一"深空"暗色底为主调（Liquid Glass 材质需要深底才能显形），
+   用 [data-theme="light"] 提供完整等价浅色方案。所有颜色一律走语义令牌，
+   组件层禁止出现硬编码色值。
+
+   色彩分配（60 / 30 / 10）：
+     60% 表面  --bg / --bg-elevated / --surface
+     30% 层次  --text / --text-secondary / --separator / --grain
+     10% 强调  --accent（单屏唯一强调色，只留给关键动作）
+   ============================================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- 表面（60%） ------------------------------------------------ */
+  --bg: #08090b;              /* 视图最底层：近黑，但不是纯黑，留一点冷调 */
+  --bg-elevated: #0e1013;     /* 抬升的区块背景 */
+  --surface: rgba(255, 255, 255, 0.04);        /* 卡片：内容层标准材质 */
+  --surface-strong: rgba(255, 255, 255, 0.07); /* 交互态卡片 */
+  --surface-inner: rgba(255, 255, 255, 0.025); /* 卡片内部再分组 */
+
+  /* -- 控件层专用（Liquid Glass：只用于导航/工具栏，绝不进内容层） -------- */
+  --chrome-bg: rgba(18, 19, 23, 0.62);
+  --chrome-border: rgba(255, 255, 255, 0.09);
+  --chrome-highlight: rgba(255, 255, 255, 0.14); /* 亮顶边：光线打在材质上 */
+  --chrome-blur: 24px;
+
+  /* ---------- 前景层级（30%） ------------------------------------------- */
+  --text: #f5f5f7;                                   /* label（primary） */
+  --text-secondary: rgba(235, 235, 245, 0.62);       /* secondaryLabel */
+  /* tertiaryLabel：0.36 实测只有 2.90:1，不达标；0.52 → 4.99:1。
+     这是"辅助说明/时间戳"层，不是装饰层，必须可读。 */
+  --text-tertiary: rgba(235, 235, 245, 0.52);
+  --separator: rgba(255, 255, 255, 0.10);            /* 发丝分隔线 */
+  --separator-strong: rgba(255, 255, 255, 0.18);
+
+  /* ---------- 强调（10%） ----------------------------------------------- */
+  /* 单屏唯一强调色。语义 = "可点击/可行动"，不做任何装饰用途。 */
+  --accent: #30d158;                 /* systemGreen（深色档） */
+  --accent-press: #28b84c;
+  --accent-on: #04220d;              /* 强调色背景上的文字 */
+  --accent-soft: rgba(48, 209, 88, 0.14);
+  --accent-ring: rgba(48, 209, 88, 0.42); /* 材质上的青色辉光 */
+
+  /* ---------- 氛围层 ----------------------------------------------------- */
+  --mesh-1: rgba(48, 209, 88, 0.20);
+  --mesh-2: rgba(10, 132, 255, 0.16);
+  --mesh-3: rgba(120, 90, 230, 0.10);
+  --grain-opacity: 0.045;
+  --glow: rgba(48, 209, 88, 0.10);
+
+  /* ---------- 排版 ------------------------------------------------------- */
+  /* 展示字：SF Pro Display 优先，中文回落到苹方（同为几何无衬线，光学尺寸连续） */
+  --font-display: "SF Pro Display", -apple-system, BlinkMacSystemFont,
+                  "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+                  "Microsoft YaHei", sans-serif;
+  /* 正文字：阅读舒适度高、字怀更开 */
+  --font-text: "SF Pro Text", -apple-system, BlinkMacSystemFont,
+               "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+               "Microsoft YaHei", sans-serif;
+  /* 等宽：用于端口号、命令、版本号、表头标签 */
+  --font-mono: "SF Mono", "JetBrains Mono", "IBM Plex Mono", ui-monospace,
+               "Menlo", "Consolas", monospace;
+
+  /* 字阶（模块化，非拍脑袋数值） */
+  --fs-display: clamp(2.75rem, 7.2vw, 5.5rem); /* 44 → 88px  首屏主标题 */
+  --fs-h1: clamp(2rem, 4.4vw, 3.25rem);        /* 32 → 52px  区块大标题 */
+  --fs-h2: clamp(1.5rem, 2.6vw, 2rem);         /* 24 → 32px  卡片组标题 */
+  --fs-h3: 1.0625rem;                          /* 17px       HIG Headline */
+  --fs-body: 1.0625rem;                        /* 17px       HIG Body */
+  --fs-callout: 1rem;                          /* 16px */
+  --fs-subhead: 0.9375rem;                     /* 15px */
+  --fs-footnote: 0.8125rem;                    /* 13px */
+  --fs-caption: 0.75rem;                       /* 12px */
+
+  /* 中文正文需要更松的行高；大标题收紧到 1.06 */
+  --lh-display: 1.06;
+  --lh-heading: 1.18;
+  --lh-body: 1.75;
+  /* 字距随字号反向变化：越大越负，越小越正 */
+  --ls-display: -0.035em;
+  --ls-heading: -0.022em;
+  --ls-body: 0.005em;
+  --ls-label: 0.06em;
+
+  /* ---------- 间距（4 的梯度） ------------------------------------------ */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 40px;
+  --space-7: 64px;
+  --space-8: 96px;
+  --space-9: 140px;
+
+  /* ---------- 形状 ------------------------------------------------------- */
+  /* 胶囊形：Apple 现代控件的默认形状语言 */
+  --radius-pill: 980px;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;   /* 卡片 */
+  --radius-xl: 34px;   /* 大面板 */
+
+  /* ---------- 阴影（三级高度体系，带环境冷色而非纯黑） ------------------ */
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.28);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.38);
+  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.52);
+  --shadow-accent: 0 6px 24px rgba(48, 209, 88, 0.22);
+
+  /* ---------- 动效 ------------------------------------------------------- */
+  /* Apple 流体界面：默认临界阻尼（无过冲），动量手势才加弹跳 */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1); /* 出场 / 大幅位移 */
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1); /* 入场 */
+  --ease-press: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-instant: 100ms;  /* 按压反馈：按下即反馈 */
+  --dur-fast: 160ms;     /* 微交互 */
+  --dur-base: 340ms;     /* 常规过渡 */
+  --dur-scene: 720ms;    /* 场景过渡 / 入场编排 */
+
+  /* ---------- 布局 ------------------------------------------------------- */
+  --page-max: 1200px;
+  --measure: 62ch;        /* 正文可读宽度上限（中文约 34 字/行） */
+  --header-h: 56px;
+  --gutter: var(--space-5);
+  --target: 44px;         /* HIG 最小点击目标 */
+}
+
+/* ============================================================================
+   浅色主题 —— 覆盖语义令牌，组件代码零改动
+   注意：不是简单反色。浅色下表面改用分层白 + 冷灰，强调色回到 systemGreen 浅色档。
+   ============================================================================ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f4f5f7;
+  --bg-elevated: #ffffff;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: #ffffff;
+  --surface-inner: rgba(120, 120, 128, 0.06);
+
+  --chrome-bg: rgba(250, 250, 252, 0.72);
+  --chrome-border: rgba(0, 0, 0, 0.07);
+  --chrome-highlight: rgba(255, 255, 255, 0.9);
+
+  --text: #0b0b0d;
+  /* 次级 0.66 → 4.04:1 不达标；0.74 → 4.78:1，0.76 → 5.07:1起 */
+  --text-secondary: rgba(60, 60, 67, 0.76);
+  /* 三级不能直接沿用 60,60,67 的高透明度（0.62 仅 3.51:1），
+     改压深基础灰 + 提高不透明度 → 6.19:1 */
+  --text-tertiary: rgba(48, 48, 54, 0.78);
+  --separator: rgba(60, 60, 67, 0.13);
+  --separator-strong: rgba(60, 60, 67, 0.24);
+
+  /* systemGreen 浅色档：原 #1c8f3f 在白底上仅 3.81:1、白字在其上 4.16:1，
+     两个方向都不达标。压深到 #157f36 → 4.67:1 / 5.10:1。 */
+  --accent: #157f36;
+  --accent-press: #106328;
+  --accent-on: #ffffff;
+  --accent-soft: rgba(21, 127, 54, 0.10);
+  --accent-ring: rgba(21, 127, 54, 0.28);
+
+  --mesh-1: rgba(52, 199, 89, 0.20);
+  --mesh-2: rgba(0, 122, 255, 0.13);
+  --mesh-3: rgba(120, 90, 230, 0.07);
+  --grain-opacity: 0.03;
+  --glow: rgba(21, 127, 54, 0.08);
+
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.09);
+  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.14);
+  --shadow-accent: 0 6px 24px rgba(21, 127, 54, 0.20);
+}
+
+/* ============================================================================
+   增强对比 —— 文字拉满、边框显形、材质转近实色
+   ============================================================================ */
+@media (prefers-contrast: more) {
+  :root {
+    --text: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.86);
+    --text-tertiary: rgba(255, 255, 255, 0.62);
+    --separator: rgba(255, 255, 255, 0.34);
+    --separator-strong: rgba(255, 255, 255, 0.5);
+    --chrome-bg: rgba(10, 11, 13, 0.94);
+    --chrome-border: rgba(255, 255, 255, 0.44);
+    --surface: rgba(255, 255, 255, 0.09);
+    --surface-strong: rgba(255, 255, 255, 0.14);
+    --accent: #3ee06a;
+  }
+  :root[data-theme="light"] {
+    --text: #000000;
+    --text-secondary: rgba(0, 0, 0, 0.82);
+    --text-tertiary: rgba(0, 0, 0, 0.6);
+    --separator: rgba(0, 0, 0, 0.34);
+    --chrome-bg: rgba(255, 255, 255, 0.96);
+    --chrome-border: rgba(0, 0, 0, 0.34);
+    --accent: #0f6b2c;
+  }
+}
+
+/* ============================================================================
+   降低透明度 —— 材质退化为实色（Liquid Glass 不能在高对比需求下继续半透明）
+   ============================================================================ */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --chrome-bg: #14151a;
+    --chrome-blur: 0px;
+    --surface: #16181d;
+    --surface-strong: #1d2026;
+    --surface-inner: #1a1c21;
+  }
+  :root[data-theme="light"] {
+    --chrome-bg: #ffffff;
+    --surface: #ffffff;
+    --surface-strong: #ffffff;
+    --surface-inner: #f1f2f4;
+  }
+}
