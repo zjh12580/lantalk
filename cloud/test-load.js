@@ -21,6 +21,7 @@ const DATA = {
   friends: [],
   reads: [],
   messages: [],
+  live: [],
 };
 let seq = 0;
 const TABLE = {};
@@ -48,6 +49,7 @@ function builder(table) {
       const list = Array.isArray(rows) ? rows : [rows];
       list.forEach((r) => {
         if (table === 'messages' || table === 'profiles') { if (!r.id) r.id = ++seq; }
+        if (table === 'live') { if (!r.id) r.id = ++seq; if (!r.started_at) r.started_at = new Date().toISOString(); }
         // 真实库里 sender_id 由 DEFAULT auth.uid() 填充，桩里补上
         if (table === 'messages' && !r.sender_id) r.sender_id = 'u_test';
         if (table === 'messages' && !r.created_at) r.created_at = new Date().toISOString();
@@ -102,7 +104,7 @@ function builder(table) {
   };
   return b;
 }
-['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages'].forEach((t) => { TABLE[t] = () => builder(t); });
+['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live'].forEach((t) => { TABLE[t] = () => builder(t); });
 
 let __updates = [];
 let __updateFail = false;      // 置 true 时模拟网关「落盘成功但响应报 404」
@@ -147,6 +149,7 @@ function makeStub() {
   console.log('\n== LanTalk 云端版 逻辑冒烟 ==\n');
   const vc = new VirtualConsole();
   vc.on('log', (...a) => console.log('[page]', ...a));
+  vc.on('jsdomError', (e) => console.log('[jsdomError]', e && e.message, e && e.detail && e.detail.stack));
   const dom = new JSDOM(html, {
     url: 'https://lan-talk.app.workbuddy.host/',
     runScripts: 'dangerously',
@@ -599,6 +602,65 @@ function makeStub() {
   log(sideEl.classList.contains('open') && !D.querySelector('#sideMask').classList.contains('hidden'), '点 ☰ 展开侧栏并显示遮罩');
   D.querySelector('#sideMask').click();
   log(!sideEl.classList.contains('open'), '点遮罩收起侧栏');
+
+  // ===== 本轮：大厅直播 =====
+  // 回到大厅
+  const hallGo = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+  if (hallGo) hallGo.click();
+  await sleep(500);
+  log(D.querySelector('#liveBar').classList.contains('hidden'), '无人直播时，公告下无直播提示行');
+
+  // 打开大厅资料页 -> 应有「开启直播」按钮
+  D.querySelector('#bInfo').click();
+  await sleep(400);
+  const lvGo1 = D.querySelector('#liveGo');
+  log(!!lvGo1 && lvGo1.textContent.indexOf('开启直播') >= 0, '大厅资料页有「开启直播」入口', lvGo1 ? lvGo1.textContent : 'none');
+
+  // 开启直播
+  lvGo1.click();
+  await sleep(900);
+  log(DATA.live.length === 1 && DATA.live[0].status === 'live', '开启直播写入 live 表（status=live）', JSON.stringify(DATA.live));
+  log(DATA.live[0] && DATA.live[0].host_id === 'u_test', '直播记录归属于本人');
+  log(!D.querySelector('#live').classList.contains('hidden'), '开启后自动进入直播间浮层');
+  log(D.querySelector('#lvAct').textContent === '结束直播', '自己直播时按钮显示「结束直播」', D.querySelector('#lvAct').textContent);
+
+  // 观众视角：另一个人（simulate）此时 startLive 应被唯一索引挡住 / 前端先拦截
+  const lvEnd = D.querySelector('#lvAct');
+  lvEnd.click();               // 点「结束直播」会弹确认框，先确认结束
+  await sleep(300);
+  const cOk2 = D.querySelector('#modal #cfOk');
+  if (cOk2) cOk2.click();
+  await sleep(900);
+  log(DATA.live.length === 0, '结束直播后记录被删除', JSON.stringify(DATA.live));
+  log(D.querySelector('#live').classList.contains('hidden'), '结束后直播间浮层关闭');
+  log(D.querySelector('#liveBar').classList.contains('hidden'), '结束后提示行隐藏');
+
+  // 他人直播：直接塞一条别人的记录，走一次轮询应看到提示行 + 资料页不可开启
+  DATA.live.push({ id: 999, host_id: 'u_a', host_name: '甲', host_avatar: '', host_color: '#888', title: '甲的直播', status: 'live', viewers: 0, started_at: new Date().toISOString() });
+  await sleep(3000);               // 等一次轮询（2.5s tick）
+  log(!D.querySelector('#liveBar').classList.contains('hidden'), '他人直播时，大厅公告下出现提示行');
+  log(D.querySelector('#liveBar').textContent.indexOf('大厅直播中') >= 0, '提示行文案为「大厅直播中，点击进入~」', D.querySelector('#liveBar').textContent);
+
+  // 点提示行进入直播间
+  D.querySelector('#liveBar').click();
+  await sleep(400);
+  log(!D.querySelector('#live').classList.contains('hidden'), '点提示行进入直播间');
+  log(D.querySelector('#lvHost').textContent.indexOf('甲') >= 0, '直播间显示主播昵称', D.querySelector('#lvHost').textContent);
+  log(D.querySelector('#lvAct').textContent === '离开', '观众视角按钮为「离开」', D.querySelector('#lvAct').textContent);
+  D.querySelector('#lvAct').click();
+  await sleep(300);
+  log(D.querySelector('#live').classList.contains('hidden'), '观众点「离开」关闭浮层');
+
+  // 他人直播时，我的资料页不应出现「开启直播」，而应显示可进入
+  D.querySelector('#bInfo').click();
+  await sleep(400);
+  const lvGo2 = D.querySelector('#liveGo');
+  log(!!lvGo2 && lvGo2.textContent.indexOf('开启直播') < 0, '他人直播时，资料页入口不再是「开启直播」', lvGo2 ? lvGo2.textContent : 'none');
+
+  // 清理：移除模拟的他人在播记录
+  DATA.live.length = 0;
+  await sleep(3000);
+  log(D.querySelector('#liveBar').classList.contains('hidden'), '主播下线后提示行自动隐藏');
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
   console.log('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败\n');
