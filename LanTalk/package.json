@@ -1,0 +1,15 @@
+{
+  "name": "lantalk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LanTalk - 局域网即时通讯系统（私聊/群聊/@提醒/文件传输），零第三方依赖",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "license": "MIT"
+}

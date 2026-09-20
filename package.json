@@ -1,0 +1,20 @@
+{
+  "name": "lantalk-dev",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LanTalk 云聊 · 完整开发环境（局域网版 + 云端版 + 冒烟测试），主程序零第三方依赖",
+  "scripts": {
+    "lan:start": "cd LanTalk && node server.js",
+    "lan:test": "cd LanTalk && node test/smoke.js",
+    "lan:ui": "cd LanTalk && node test/ui-check.js",
+    "cloud:test": "node cloud/test-load.js",
+    "test": "npm run lan:test && npm run cloud:test"
+  },
+  "devDependencies": {
+    "jsdom": "^22.1.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LanTalk · 局域网即时通讯</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%2307c160'/><text y='72' x='50' font-size='58' text-anchor='middle' fill='white' font-family='sans-serif'>L</text></svg>">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="theme-dark">
+
+<!-- ============ 登录 / 注册 ============ -->
+<div id="auth" class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="auth-logo">L</div>
+      <div>
+        <h1>LanTalk</h1>
+        <p>局域网即时通讯 · 私聊 / 群聊 / @提醒</p>
+      </div>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login">登录</button>
+      <button class="auth-tab" data-tab="register">注册</button>
+    </div>
+    <form id="authForm" autocomplete="off">
+      <input id="au-username" class="input" placeholder="用户名" required>
+      <input id="au-password" class="input" type="password" placeholder="密码" required>
+      <input id="au-name" class="input hidden" placeholder="昵称（选填）">
+      <div id="authError" class="auth-error"></div>
+      <button class="btn primary block" type="submit">登录</button>
+    </form>
+    <p class="auth-tip">首次使用请注册账号，数据保存在服务端本地目录，不上传任何外部服务器。</p>
+  </div>
+</div>
+
+<!-- ============ 主界面 ============ -->
+<div id="app" class="app hidden">
+  <!-- 左侧栏 -->
+  <aside class="sidebar">
+    <div class="side-head">
+      <div class="me" id="meBox" title="点击修改资料">
+        <div class="avatar" id="meAvatar">我</div>
+        <div class="me-info">
+          <div class="me-name" id="meName">-</div>
+          <div class="me-sub"><span class="dot-online"></span><span id="meStatus">在线</span></div>
+        </div>
+      </div>
+      <div class="head-actions">
+        <button class="icon-btn" id="btnSearch" title="搜索">🔍</button>
+        <button class="icon-btn" id="btnNew" title="发起群聊 / 添加好友">＋</button>
+        <button class="icon-btn" id="btnTheme" title="切换主题">🌙</button>
+        <button class="icon-btn" id="btnLogout" title="退出登录">⏻</button>
+      </div>
+    </div>
+
+    <div class="search-row hidden" id="searchRow">
+      <input id="searchInput" class="input" placeholder="搜索会话、联系人、消息…">
+    </div>
+
+    <div class="conv-tabs">
+      <button class="conv-tab active" data-filter="all">全部</button>
+      <button class="conv-tab" data-filter="unread">未读<span class="tab-badge hidden" id="unreadTotal">0</span></button>
+      <button class="conv-tab" data-filter="group">群聊</button>
+      <button class="conv-tab" data-filter="friend">好友请求<span class="tab-badge hidden" id="reqBadge">0</span></button>
+    </div>
+
+    <div class="conv-list" id="convList"></div>
+    <div class="side-foot">
+      <span id="onlineInfo">在线 0 人</span>
+      <span id="connState" class="conn-ok">已连接</span>
+    </div>
+  </aside>
+
+  <!-- 中间聊天区 -->
+  <main class="chat" id="chatPane">
+    <div class="chat-empty" id="chatEmpty">
+      <div class="empty-logo">L</div>
+      <p>选择一个会话开始聊天</p>
+      <small>点击左上角 ＋ 可以建群或添加好友</small>
+    </div>
+
+    <div class="chat-main hidden" id="chatMain">
+      <header class="chat-head">
+        <div class="chat-title">
+          <span id="chatName">会话</span>
+          <span id="chatSub" class="chat-sub"></span>
+        </div>
+        <div class="chat-actions">
+          <button class="icon-btn" id="btnVoice" title="消息提示音">🔔</button>
+          <button class="icon-btn" id="btnSearchInConv" title="查找聊天记录">🔍</button>
+          <button class="icon-btn" id="btnInfo" title="会话信息">ⓘ</button>
+        </div>
+      </header>
+
+      <div class="announce hidden" id="announceBar"></div>
+
+      <div class="msg-list" id="msgList"></div>
+
+      <div class="typing-bar hidden" id="typingBar"></div>
+
+      <div class="reply-bar hidden" id="replyBar">
+        <span id="replyText"></span>
+        <button class="icon-btn" id="replyCancel">✕</button>
+      </div>
+
+      <footer class="composer">
+        <div class="composer-tools">
+          <button class="icon-btn" id="btnEmoji" title="表情">😊</button>
+          <button class="icon-btn" id="btnImage" title="发送图片">🖼</button>
+          <button class="icon-btn" id="btnFile" title="发送文件">📎</button>
+          <button class="icon-btn" id="btnAt" title="提醒某人">＠</button>
+          <button class="icon-btn" id="btnHistory" title="加载更早消息">🕘</button>
+        </div>
+        <textarea id="input" class="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="1"></textarea>
+        <button class="btn primary" id="btnSend">发送</button>
+      </footer>
+    </div>
+  </main>
+
+  <!-- 右侧信息栏 -->
+  <aside class="infobar hidden" id="infobar"></aside>
+</div>
+
+<!-- ============ 弹窗 ============ -->
+<div class="modal-wrap hidden" id="modalWrap">
+  <div class="modal" id="modal"></div>
+</div>
+
+<!-- @成员选择器 -->
+<div class="mention-pop hidden" id="mentionPop"></div>
+<!-- 表情面板 -->
+<div class="emoji-pop hidden" id="emojiPop"></div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+<input type="file" id="fileInput" class="hidden">
+<input type="file" id="imageInput" accept="image/*" class="hidden">
+
+<script src="/app.js"></script>
+</body>
+</html>

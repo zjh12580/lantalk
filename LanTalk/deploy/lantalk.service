@@ -1,0 +1,19 @@
+[Unit]
+Description=LanTalk 局域网即时通讯服务
+After=network.target
+
+[Service]
+Type=simple
+# 改成实际运行用户和部署目录
+User=lantalk
+WorkingDirectory=/opt/lantalk
+Environment=PORT=3000
+Environment=LANCHAT_DATA=/opt/lantalk/data
+ExecStart=/usr/bin/node /opt/lantalk/server.js
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/lantalk.log
+StandardError=append:/var/log/lantalk.log
+
+[Install]
+WantedBy=multi-user.target

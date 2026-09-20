@@ -1,0 +1,18 @@
+# WorkBuddy 内部文件
+.workbuddy/
+.wbapp_*
+
+# 打包产物
+*.tar
+*.tar.gz
+*.zip
+
+# 依赖与运行时数据
+node_modules/
+LanTalk/data/
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
