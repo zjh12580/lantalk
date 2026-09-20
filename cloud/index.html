@@ -217,6 +217,21 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .mem{display:flex;flex-direction:column;align-items:center;width:56px;gap:4px;cursor:pointer;font-size:11px;color:var(--tx2)}
 .mem span{max-width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
 .row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:13px;border-bottom:1px solid var(--bd)}
+/* 用户信息弹层头部：头像居左，昵称 + 在线状态紧随其后 */
+.ihead{display:flex;align-items:center;gap:12px;padding:4px 2px 16px}
+.ihead .av{flex-shrink:0}
+.ibody{min-width:0;flex:1}
+.inm{font-size:16px;font-weight:600;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.istat{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;color:var(--tx3)}
+.istat .idot{width:8px;height:8px;border-radius:50%;background:#8a8f99;flex-shrink:0}
+.istat.on{color:var(--brand)}
+.istat.on .idot{background:var(--brand);box-shadow:0 0 0 3px rgba(7,193,96,.16)}
+.ink{font-size:12px;color:var(--tx3);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.isec{margin-top:4px}
+.isec .lbl{font-size:12px;color:var(--tx3);padding:10px 0 4px;font-weight:500}
+.isec .row:last-child{border-bottom:none}
+.isec .row:first-of-type{border-top:1px solid var(--bd)}
+.info .btn.block{margin-top:14px}
 
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:100}
 .modal{background:var(--bg2);border-radius:14px;width:420px;max-width:92vw;max-height:84vh;overflow-y:auto;padding:22px;box-shadow:var(--sd)}
@@ -2002,13 +2017,15 @@ function renderInfo() {
     var mem = S.members[c.id] || [];
     var isOwner = c.owner === S.uid;
     var g = S.groups.filter(function (x) { return x.id === c.id; })[0] || {};
-    bar.innerHTML = '<div style="text-align:center;margin-bottom:16px">' + avOf(c.name, '', c.color, 'l')
-      + '<div style="margin-top:8px;font-weight:600">' + esc(c.name) + '</div>'
-      + '<div style="font-size:12px;color:var(--tx3)">' + mem.length + ' 位成员</div></div>'
-      + '<div style="margin-bottom:16px"><h4>群成员</h4><div class="mgrid">'
+    bar.innerHTML = '<div class="ihead">' + avOf(c.name, '', c.color, 'l')
+      + '<div class="ibody">'
+      + '<div class="inm" title="' + esc(c.name) + '">' + esc(c.name) + '</div>'
+      + '<div class="istat"><span class="idot"></span>' + mem.length + ' 位成员</div>'
+      + '</div></div>'
+      + '<div class="isec"><div class="lbl">群成员</div><div class="mgrid" style="padding:4px 0 6px">'
       + mem.map(function (u) { var p = S.profiles[u] || {}; return '<div class="mem" data-u="' + esc(u) + '">' + avOf(p.nickname, p.avatar, p.color, 's') + '<span>' + esc(p.nickname || '') + (u === c.owner ? ' 👑' : (u === BOT.id ? ' 🤖' : '')) + '</span></div>'; }).join('')
       + '</div></div>'
-      + '<div style="margin-bottom:16px"><h4>设置</h4>'
+      + '<div class="isec"><div class="lbl">设置</div>'
       + '<div class="row"><span>消息免打扰</span><button class="btn ghost" id="muteBtn" style="padding:4px 12px;font-size:12px">' + (c.muted ? '已开启' : '已关闭') + '</button></div>'
       + (isOwner ? '<div class="row"><span>群名称</span><button class="btn ghost" id="rnBtn" style="padding:4px 12px;font-size:12px">修改</button></div>' : '')
       + (isOwner ? '<div class="row"><span>群公告</span><button class="btn ghost" id="anBtn" style="padding:4px 12px;font-size:12px">编辑</button></div>' : '')
@@ -2056,11 +2073,14 @@ function renderInfo() {
     } else {
       frow = '<div class="row"><span>非好友</span><button class="btn primary" id="afBtn" style="' + bs + '">加为好友</button></div>';
     }
-    bar.innerHTML = '<div style="text-align:center;margin-bottom:16px">' + avOf(p.nickname, p.avatar, p.color, 'l')
-      + '<div style="margin-top:8px;font-weight:600">' + esc(displayName(c.id)) + '</div>'
-      + (remarkOf(c.id) ? '<div style="font-size:12px;color:var(--tx3)">昵称：' + esc(p.nickname || '') + '</div>' : '')
-      + '<div style="font-size:12px;color:var(--tx3)">' + (onlineOf(c.id) ? '🟢 在线' : '⚪ 离线') + '</div></div>'
-      + '<div style="margin-bottom:16px"><h4>设置</h4>'
+    var on = onlineOf(c.id);
+    bar.innerHTML = '<div class="ihead">' + avOf(p.nickname, p.avatar, p.color, 'l')
+      + '<div class="ibody">'
+      + '<div class="inm" title="' + esc(displayName(c.id)) + '">' + esc(displayName(c.id)) + '</div>'
+      + '<div class="istat' + (on ? ' on' : '') + '"><span class="idot"></span>' + (on ? '在线' : '离线') + '</div>'
+      + (remarkOf(c.id) ? '<div class="ink">昵称：' + esc(p.nickname || '') + '</div>' : '')
+      + '</div></div>'
+      + '<div class="isec"><div class="lbl">设置</div>'
       + '<div class="row"><span>备注名</span><button class="btn ghost" id="rmBtn" style="' + bs + '">修改</button></div>'
       + frow
       + '</div><button class="btn block" id="clBtn">关闭会话</button>';
