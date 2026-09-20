@@ -130,11 +130,12 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 .day span{font-size:11px;color:var(--tx3);background:var(--bg3);padding:2px 8px;border-radius:4px}
 .sys{text-align:center;margin:6px 0}
 .sys span{font-size:12px;color:var(--tx3);background:var(--bg3);padding:3px 10px;border-radius:10px}
-.m{display:flex;gap:10px;padding:4px 0;align-items:flex-start}
+.m{display:flex;gap:10px;padding:5px 0;align-items:flex-start}
 .m.self{flex-direction:row-reverse}
 .mb{max-width:min(620px,68%);min-width:0}
-.meta{font-size:11px;color:var(--tx3);margin-bottom:3px;display:flex;gap:6px;align-items:center}
+.meta{font-size:11px;color:var(--tx3);margin-bottom:4px;display:flex;gap:6px;align-items:center}
 .m.self .meta{flex-direction:row-reverse}
+.meta .mname{color:var(--tx2);font-weight:500}
 .attlist{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
 .attchip{display:flex;align-items:center;gap:7px;padding:4px 8px;background:var(--bg3);border:1px solid var(--bd);border-radius:8px;font-size:12px;color:var(--tx2);max-width:100%}
 .attchip img{height:48px;width:48px;object-fit:cover;border-radius:6px;display:block;background:var(--hover)}
@@ -158,12 +159,14 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 body.unread-glow .app{animation:uglow 1.1s infinite}
 .tab.blink{color:var(--danger);animation:ublink 1s infinite}
 .rbar.flash{background:rgba(250,81,81,.14);color:var(--danger)}
-.meta .rd{color:var(--tx3);font-size:10px}
+.meta .rd{color:var(--tx3);font-size:11px}
 .meta .rd.rdet{cursor:pointer}
 .meta .rd.rdet:hover{text-decoration:underline;color:var(--tx2)}
 .meta .rd.on{color:var(--brand)}
-.bub{background:var(--bb);color:var(--bbtx);padding:8px 12px;border-radius:10px;word-break:break-word;white-space:pre-wrap;line-height:1.55;box-shadow:0 1px 2px rgba(0,0,0,.06)}
-.m.self .bub{background:#95ec69;color:#10210c}
+.meta .rd.on::before{content:'✓ '}
+.bub{background:var(--bb);color:var(--bbtx);padding:10px 14px;border-radius:14px;word-break:break-word;white-space:pre-wrap;line-height:1.55;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.m:not(.self) .bub{border-top-left-radius:4px}
+.m.self .bub{background:#95ec69;color:#10210c;border-top-right-radius:4px}
 .bub.hl{box-shadow:0 0 0 2px var(--danger) inset}
 .bub .at{color:var(--at)}
 .quote{border-left:3px solid var(--tx3);padding:2px 8px;margin-bottom:5px;font-size:12px;color:var(--tx2);background:rgba(128,128,128,.12);border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -172,8 +175,9 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .quote .qthumb{width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0;background:var(--hover);display:block}
 .quote .qt{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bub img.at2{width:260px;height:170px;object-fit:cover;border-radius:6px;cursor:pointer;display:block;background:var(--bg3)}
-.fcard{display:flex;align-items:center;gap:10px;background:rgba(128,128,128,.12);padding:8px 10px;border-radius:8px;cursor:pointer;min-width:190px}
-.fcard .fi{font-size:24px}
+.fcard{display:flex;align-items:center;gap:12px;background:transparent;border:1px solid var(--bd);padding:12px 14px;border-radius:12px;cursor:pointer;min-width:220px;transition:background .15s,border-color .15s}
+.fcard:hover{background:var(--hover);border-color:var(--tx3)}
+.fcard .fi{width:40px;height:40px;border-radius:10px;background:var(--bg3);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0}
 .fn{font-size:13px;font-weight:500;word-break:break-all}
 .fs{font-size:11px;color:var(--tx2)}
 .ops{display:flex;gap:6px;margin-top:3px;font-size:11px;color:var(--tx3);opacity:0}
@@ -181,8 +185,17 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .m.self .ops{justify-content:flex-end}
 .ops button{background:none;border:none;color:var(--tx3);cursor:pointer;font-size:11px;padding:0}
 .ops button:hover{color:var(--brand)}
-.rev{font-size:12px;color:var(--tx3);font-style:italic;padding:6px 10px;background:var(--bg3);border-radius:8px;display:inline-block}
-.typ{padding:2px 20px 6px;font-size:12px;color:var(--brand);height:22px}
+.rev{font-size:12px;color:var(--tx3);font-style:italic;padding:9px 14px;background:transparent;border:1px dashed var(--bd);border-radius:14px;display:inline-block}
+/* 输入中：消息流底部的头像 + 气泡（三个跳动圆点） */
+.typ{display:flex;align-items:center;gap:8px;padding:4px 16px 10px;background:var(--bg)}
+.typ .tav .av{width:28px;height:28px;font-size:14px;border-radius:8px}
+.tbub{display:inline-flex;align-items:center;gap:8px;background:var(--bb);color:var(--bbtx);padding:9px 14px;border-radius:4px 14px 14px 14px}
+.tdots{display:inline-flex;gap:4px;align-items:center}
+.tdots i{width:6px;height:6px;border-radius:50%;background:var(--tx2);animation:typdot 1.2s ease-in-out infinite}
+.tdots i:nth-child(2){animation-delay:.15s}
+.tdots i:nth-child(3){animation-delay:.3s}
+@keyframes typdot{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-4px);opacity:1}}
+.typ .ttxt{font-size:12px;color:var(--tx3)}
 .rbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 16px;background:var(--bg3);border-top:1px solid var(--bd);font-size:12px;color:var(--tx2)}
 .rbar span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .comp{border-top:1px solid var(--bd);padding:10px 14px 14px;background:var(--bg2)}
@@ -232,6 +245,8 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .toast{background:var(--bg3);border:1px solid var(--bd);box-shadow:var(--sd);padding:9px 16px;border-radius:20px;font-size:13px;max-width:70vw;cursor:pointer}
 .toast.err{border-color:var(--danger);color:var(--danger)}
 @media(max-width:900px){.side{width:220px}.info{display:none!important}}
+.hd-on{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);margin-right:10px;white-space:nowrap}
+@media(max-width:640px){.hd-on{display:none}}
 /* 手机端：左侧栏收窄只显示头像 logo，点 ☰ 或遮罩展开完整侧栏 */
 .side-toggle{display:none}
 .side-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:55}
@@ -377,7 +392,8 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
     <div class="main hidden" id="cMain">
       <div class="hd">
         <div class="hd-t"><span id="cName">会话</span><span class="hd-s" id="cSub"></span></div>
-        <div style="display:flex;gap:2px">
+        <div style="display:flex;align-items:center;gap:2px">
+          <span class="hd-on" id="hdOn" title="当前在线人数"><i class="doton"></i><span id="hdOnTx">在线 0 人</span></span>
           <button class="ib" id="bBell" title="提示音">🔔</button>
           <button class="ib" id="bFind" title="查找记录">🔍</button>
           <button class="ib" id="bInfo" title="会话信息">ⓘ</button>
@@ -698,8 +714,10 @@ function botSay(conv, text) {
 function botTyping(conv) {
   var bar = $('#typBar');
   if (!bar) return;
+  bar.innerHTML = '<span class="tav">' + avOf(BOT.name, BOT.avatar, BOT.color, 's') + '</span>'
+    + '<div class="tbub"><span class="tdots"><i></i><i></i><i></i></span>'
+    + '<span class="ttxt">' + esc(BOT.name) + ' 正在输入…</span></div>';
   bar.classList.remove('hidden');
-  bar.textContent = '小美正在输入…';
   clearTimeout(S.botTyping);
   S.botTyping = setTimeout(function () { bar.classList.add('hidden'); }, 1400);
 }
@@ -1344,6 +1362,7 @@ function updateOnline() {
   var n = 0;
   Object.keys(S.profiles).forEach(function (id) { if (id !== BOT.id && onlineOf(id)) n++; });
   $('#onInfo').textContent = '在线 ' + n + ' 人';
+  var ho = $('#hdOnTx'); if (ho) ho.textContent = '在线 ' + n + ' 人';
 }
 
 // ---------- 渲染 ----------
@@ -1521,9 +1540,12 @@ function renderMsgs(scroll) {
       + '<div class="mav" data-u="' + esc(m.sender_id) + '" title="点击给 ' + esc(m.sender_name || '') + ' 发私聊消息">'
       + avOf(m.sender_name, m.sender_avatar, m.sender_color, 's') + '</div>'
       + '<div class="mb">'
-      + (S.cur.indexOf('g:') === 0 && !self ? '<div class="meta"><span>' + esc(m.sender_name) + '</span></div>' : '')
+      + '<div class="meta">'
+      + (S.cur.indexOf('g:') === 0 && !self ? '<span class="mname">' + esc(m.sender_name) + '</span>' : '')
+      + '<span>' + fmtTime(m.created_at) + '</span>'
+      + rdHtml(self ? readLabel(m) : '')
+      + '</div>'
       + inner
-      + '<div class="meta"><span>' + fmtTime(m.created_at) + '</span>' + rdHtml(self ? readLabel(m) : '') + '</div>'
       + ops + '</div></div>';
   });
   box.innerHTML = html;
