@@ -69,13 +69,31 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 .tab.on{background:var(--hover);color:var(--tx)}
 .tbadge{display:inline-block;margin-left:3px;background:var(--danger);color:#fff;border-radius:9px;padding:0 5px;font-size:10px;line-height:15px}
 .list{flex:1;overflow-y:auto}
-.foot{display:flex;justify-content:space-between;padding:8px 12px;font-size:11px;color:var(--tx3);border-top:1px solid var(--bd)}
-.foot .ib{width:20px;height:20px;font-size:12px}
+.foot{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:11px;color:var(--tx3);border-top:1px solid var(--bd)}
+/* 左下角设置按钮（放大版：40×40 点击区，图标 21px） */
+.foot .ib{width:40px;height:40px;font-size:21px;border-radius:10px;flex-shrink:0}
+.foot .ib:hover{background:var(--hover)}
+.foot .ib:active{transform:scale(.94)}
+.foot .sico{font-size:34px;line-height:1}
 /* 左下角设置弹层 */
-.spop{width:200px;padding:6px}
-.spop .srow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;font-size:13px;cursor:pointer;border-radius:8px;color:var(--tx)}
+.spop{width:232px;padding:6px}
+.spop .srow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;font-size:13px;cursor:pointer;border-radius:8px;color:var(--tx)}
 .spop .srow:hover{background:var(--hover)}
 .spop .srow.danger{color:var(--danger)}
+/* 导出 / 读取聊天记录弹窗 */
+.dlg .drow{display:flex;gap:10px;margin-top:4px}
+.dlg .dbtn{flex:1;background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:14px 12px;cursor:pointer;color:var(--tx);font-family:inherit;text-align:center;transition:background .15s,border-color .15s}
+.dlg .dbtn:hover{background:var(--hover);border-color:var(--brand)}
+.dlg .dbtn .di{font-size:24px;display:block;margin-bottom:6px}
+.dlg .dbtn .dt{font-size:13px;font-weight:500;display:block}
+.dlg .dbtn .dd{font-size:11px;color:var(--tx3);display:block;margin-top:3px;line-height:1.45}
+.sprev{border:1px solid var(--bd);border-radius:10px;background:var(--bg3);padding:12px 14px;margin-top:14px;font-size:12px}
+.sprev table{width:100%;border-collapse:collapse}
+.sprev td{padding:4px 0;vertical-align:top}
+.sprev td:first-child{color:var(--tx3);white-space:nowrap;padding-right:12px;width:76px}
+.sprev .sc{max-height:130px;overflow-y:auto;margin-top:8px;border-top:1px dashed var(--bd);padding-top:8px}
+.sprev .sc div{padding:2px 0;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.impbox{width:100%;box-sizing:border-box;height:150px;background:var(--bg3);color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:10px;font:inherit;font-size:12px;line-height:1.6;resize:vertical}
 .switch{width:34px;height:20px;border-radius:20px;background:var(--tx3);position:relative;flex-shrink:0;transition:background .2s}
 .switch i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .2s}
 .switch.on{background:var(--brand)}
@@ -339,7 +357,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
       <input class="inp" id="sInput" placeholder="搜索联系人或消息…">
     </div>
     <div class="list" id="cList"></div>
-    <div class="foot"><span id="onInfo">在线 0 人</span><span style="display:flex;gap:4px;align-items:center"><span id="conn" style="color:var(--brand)">已连接</span><button class="ib" id="bSet" title="设置">⚙️</button></span></div>
+    <div class="foot"><span id="onInfo">在线 0 人</span><span style="display:flex;gap:8px;align-items:center"><span id="conn" style="color:var(--brand)">已连接</span><button class="ib" id="bSet" title="设置" aria-label="设置"><span class="sico">⚙️</span></button></span></div>
   </aside>
 
   <main class="chat">
@@ -1003,6 +1021,7 @@ function enterApp() {
   renderMe();
   try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
   setSync('同步中…');
+  applyStoredImports();   // 先把本机保存的导入记录拼回来，再拉云端
   refreshAll().then(function () {
     var hall = S.convs.filter(function (c) { return c.id === 'hall'; })[0];
     openConv(hall ? hall.conv : (S.convs[0] ? S.convs[0].conv : null));
@@ -1109,6 +1128,14 @@ function buildConvs() {
       avatar: S.profiles[pid].avatar || '', color: S.profiles[pid].color,
       isFriend: isFriend(pid), muted: false, last: null,
     });
+  });
+  // 「读取聊天记录」导入的、云端当前没有的会话：追加到列表末尾，避免刷新后消失
+  var inList = {};
+  list.forEach(function (c) { inList[c.conv] = 1; });
+  Object.keys(S.localConvs || {}).forEach(function (cv) {
+    if (inList[cv]) return;
+    var lc = S.localConvs[cv];
+    list.push({ conv: cv, type: lc.type || 'group', id: lc.id || convPeer({ conv: cv }), name: lc.title || cv, avatar: '', color: '#8a8f99', isFriend: false, muted: false, last: null, localOnly: true });
   });
   // 最近消息 + 未读
   var lastMap = {};
@@ -1384,7 +1411,8 @@ function openConv(conv) {
   c.atMe = false;
   renderConvs();
   if (S.info) renderInfo();
-  if (!S.msgs[conv]) return loadHistory(conv);
+  // 会话里混有「读取聊天记录」导入的本地历史时，仍要拉一次云端，合并出完整视图
+  if (!S.msgs[conv] || (S.impLoaded || {})[conv]) return loadHistory(conv);
   renderMsgs('bottom'); markRead(conv);
 }
 function loadHistory(conv, before) {
@@ -1392,7 +1420,12 @@ function loadHistory(conv, before) {
   if (before) qy = qy.lt('id', before);
   return q(qy).then(function (rows) {
     rows.reverse();
-    S.msgs[conv] = before ? rows.concat(S.msgs[conv] || []) : rows;
+    // 保住「读取聊天记录」导入的本地历史：云端结果里没有的导入消息重新拼回去
+    var keep = (S.msgs[conv] || []).filter(function (m) {
+      return m.__local && !rows.some(function (r) { return String(r.id) === String(m.id); });
+    });
+    S.msgs[conv] = before ? rows.concat(S.msgs[conv] || []) : rows.concat(keep);
+    if (!before && keep.length) S.msgs[conv].sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
     S.more[conv] = rows.length === 40;
     renderMsgs(before ? 'keep' : 'bottom');
     if (!before) markRead(conv);
@@ -1428,6 +1461,13 @@ function renderMsgs(scroll) {
   if (S.more[S.cur]) html += '<div class="day"><span style="cursor:pointer" id="loadMore">加载更早的消息</span></div>';
   var lastDay = '';
   list.forEach(function (m) {
+    // 导入的历史消息：没有云端 profile，用导出包里的名字/头像兜底
+    if (m.__from && !m.sender_name) {
+      m.sender_name = m.sender_id === S.uid ? ((S.me && S.me.nickname) || m.__from) : m.__from;
+      var pf = S.profiles[m.sender_id];
+      m.sender_avatar = m.sender_avatar || (pf && pf.avatar) || '';
+      m.sender_color = m.sender_color || (pf && pf.color) || '#8a8f99';
+    }
     var day = fmtDay(m.created_at);
     if (day !== lastDay) { html += '<div class="day"><span>' + day + '</span></div>'; lastDay = day; }
     if (m.type === 'system') { html += '<div class="sys"><span>' + esc(m.text) + '</span></div>'; return; }
@@ -1799,7 +1839,7 @@ document.addEventListener('paste', function (e) {
 });
 
 // ---------- 弹窗 ----------
-function openModal(html) { $('#modal').innerHTML = html; $('#mask').classList.remove('hidden'); }
+function openModal(html) { var m = $('#modal'); m.className = 'modal'; m.innerHTML = html; $('#mask').classList.remove('hidden'); }
 function closeModal() { $('#mask').classList.add('hidden'); }
 window.LT = { close: closeModal };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
@@ -2196,19 +2236,438 @@ function doExit() {
   closePops();
   confirmBox('确定退出登录？', function () { CLOUD.auth.signOut().then(function () { location.reload(); }); });
 }
-// 左下角「设置」：夜间模式 + 退出登录
+// 左下角「设置」：夜间模式 / 导出聊天记录 / 读取聊天记录 / 退出登录
 $('#bSet').onclick = function () {
   var pop = $('#spop');
   if (!pop.classList.contains('hidden')) { closePops(); return; }
   closePops();
   pop.innerHTML = ''
     + '<div class="srow" id="sTheme"><span>夜间模式</span><span class="switch' + (S.theme === 'dark' ? ' on' : '') + '" id="sThemeSw"><i></i></span></div>'
+    + '<div class="srow" id="sExp"><span>导出聊天记录</span><span style="color:var(--tx3);font-size:12px">↧</span></div>'
+    + '<div class="srow" id="sImp"><span>读取聊天记录</span><span style="color:var(--tx3);font-size:12px">↥</span></div>'
     + '<div class="srow danger" id="sExit"><span>退出登录</span></div>';
   pop.classList.remove('hidden');
   placePop(pop, $('#bSet'));
   $('#sTheme').onclick = toggleTheme;
+  $('#sExp').onclick = openExportDlg;
+  $('#sImp').onclick = openImportDlg;
   $('#sExit').onclick = doExit;
 };
+
+// ==================== 聊天记录 导出 / 读取 ====================
+// 导出格式：lt_rec 1.0（JSON）+ 同名 TXT 便于直接阅读
+var EXP_LIMIT = 3000;      // 单会话最多导出条数
+var IMP_MAX = 8000;        // 单次最多导入条数（防止误选超大文件卡死）
+
+function userName(id) {
+  if (id === S.uid) return displayName(S.uid) || '我';
+  return (S.profiles[id] && S.profiles[id].nickname) || ('用户' + String(id).slice(0, 6));
+}
+function convTitle(conv, type, id) {
+  if (conv === 'hall' || id === 'hall') return '大厅';
+  if (type === 'group') {
+    var g = S.groups.filter(function (x) { return x.id === id; })[0];
+    return (g && g.name) || ('群聊 ' + id);
+  }
+  return userName(id);
+}
+function attSummary(a) {
+  var t = (a && a.type) || '';
+  if (t === 'image') return '[图片] ' + (a.name || '');
+  if (t === 'file') return '[文件] ' + (a.name || '') + (a.size ? ' (' + fmtSize(a.size) + ')' : '');
+  return a && a.name ? '[' + t + '] ' + a.name : '';
+}
+// 把一条消息拍平成导出用的明文，便于 TXT 阅读与搜索
+function msgToPlain(m) {
+  var body = [];
+  if (m.revoked) body.push('[消息已撤回]');
+  var t = String(m.text || '');
+  if (t) body.push(t);
+  var a = attSummary(m.att);
+  if (a) body.push(a);
+  if (!body.length) body.push('(空消息)');
+  return body.join(' ');
+}
+// 会话 -> 导出包
+function buildPack(scopeConv) {
+  var convs = [];
+  (S.convs || []).forEach(function (c) {
+    if (scopeConv && c.conv !== scopeConv) return;
+    // 本地已载入的消息 + 云端最近消息，合并去重（本地可能翻过更早的页，云端可能有更新的）
+    var local = (S.msgs[c.conv] || []);
+    var remote = (S.recent || []).filter(function (m) { return m.conv === c.conv; });
+    var seen = {}, all = [];
+    local.concat(remote).forEach(function (m) {
+      if (!m || m.id == null || seen[m.id]) return;
+      seen[m.id] = 1;
+      all.push(m);
+    });
+    all.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
+    if (all.length > EXP_LIMIT) all = all.slice(all.length - EXP_LIMIT);   // 超限保留最新的
+    var msgs = [];
+    all.forEach(function (m) {
+      msgs.push({
+        id: m.id,
+        time: m.created_at || null,
+        from_id: m.sender_id || null,
+        from: m.__from || userName(m.sender_id),
+        text: String(m.text || ''),
+        att: m.att || null,
+        quote_id: m.quote_id || null,
+        revoked: !!m.revoked,
+        at: Array.isArray(m.at) ? m.at : [],
+        plain: msgToPlain(m),
+      });
+    });
+    if (!msgs.length) return;
+    convs.push({
+      conv: c.conv,
+      type: c.type,
+      title: c.name || convTitle(c.conv, c.type, c.id),
+      msgCount: msgs.length,
+      firstTime: msgs[0].time,
+      lastTime: msgs[msgs.length - 1].time,
+      msgs: msgs,
+    });
+  });
+  return {
+    format: 'lt_rec',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    app: 'LanTalk',
+    owner: { id: S.uid, nickname: (S.me && S.me.nickname) || '' },
+    convs: convs,
+  };
+}
+function packMsgCount(pack) {
+  return (pack.convs || []).reduce(function (n, c) { return n + ((c.msgs && c.msgs.length) || 0); }, 0);
+}
+function lastTime(msgs) {
+  var t = '';
+  msgs.forEach(function (m) { if (m.time && m.time > t) t = m.time; });
+  return t;
+}
+function dayKey(iso) {
+  var d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+function dayLabel(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '未知时间';
+  var w = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + w;
+}
+function stamp(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '--:--';
+  return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+function packToTxt(pack) {
+  var L = [];
+  L.push('LanTalk 聊天记录');
+  L.push('导出时间：' + new Date(pack.exportedAt).toLocaleString());
+  L.push('导出账号：' + (pack.owner.nickname || pack.owner.id || '-'));
+  L.push('会话数：' + pack.convs.length + '　消息数：' + packMsgCount(pack));
+  L.push('');
+  L.push('==================================================');
+  (pack.convs || []).forEach(function (c) {
+    L.push('');
+    L.push('【' + c.title + '】　（' + c.msgCount + ' 条）');
+    var dk = '';
+    (c.msgs || []).forEach(function (m) {
+      var k = m.time ? dayKey(m.time) : '';
+      if (k && k !== dk) { dk = k; L.push(''); L.push('── ' + dayLabel(m.time) + ' ──'); }
+      var when = m.time ? stamp(m.time) : '';
+      if (m.revoked) { L.push('  ' + when + ' 「' + m.from + '」 ' + m.plain); return; }
+      L.push('  ' + when + ' 「' + m.from + '」 ' + m.plain);
+    });
+    L.push('');
+    L.push('--------------------------------------------------');
+  });
+  L.push('');
+  L.push('（本文件由 LanTalk 导出，可用「设置 - 读取聊天记录」导入 JSON 版找回。）');
+  return L.join('\n');
+}
+function downloadFile(name, content, mime) {
+  try {
+    var blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 1500);
+    return true;
+  } catch (e) {
+    toast('导出失败：' + (e.message || e), 'err');
+    return false;
+  }
+}
+function expStamp() {
+  var d = new Date();
+  return '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes());
+}
+// 弹窗骨架
+function openDlg(title, bodyHtml) {
+  var mask = $('#mask');
+  var m = $('#modal');
+  m.className = 'modal dlg';
+  m.innerHTML = '<h3>' + esc(title) + '</h3>' + bodyHtml;
+  mask.classList.remove('hidden');
+  return m;
+}
+// ---- 导出弹窗 ----
+function openExportDlg() {
+  closePops();
+  var cur = S.cur ? cm()[S.cur] : null;
+  var curName = cur ? convTitle(cur.conv, cur.type, cur.id) : '';
+  var allCount = packMsgCount(buildPack(null));
+  openDlg('导出聊天记录', ''
+    + '<div style="font-size:12px;color:var(--tx2);line-height:1.6">导出为 JSON（可回读）+ TXT（直接阅读）两个文件。只导出你自己能看到的会话。</div>'
+    + '<div class="drow">'
+    + '<button class="dbtn" id="expCur"' + (cur ? '' : ' disabled style="opacity:.45;cursor:not-allowed"') + '>'
+    + '<span class="di">💬</span><span class="dt">当前会话</span>'
+    + '<span class="dd">' + (cur ? esc(curName) : '请先打开一个会话') + '</span></button>'
+    + '<button class="dbtn" id="expAll">'
+    + '<span class="di">🗂️</span><span class="dt">全部会话</span>'
+    + '<span class="dd">共 ' + (S.convs || []).length + ' 个会话 / ' + allCount + ' 条消息</span></button>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn gh" id="expCancel">关闭</button></div>');
+  $('#expCancel').onclick = closeModal;
+  if (cur) $('#expCur').onclick = function () { doExport(cur.conv); };
+  $('#expAll').onclick = function () { doExport(null); };
+}
+function doExport(scopeConv) {
+  var pack = buildPack(scopeConv);
+  if (!pack.convs.length) { toast('没有可导出的消息', 'err'); return; }
+  var base = 'LanTalk-' + (scopeConv ? '会话' : '全部记录') + '-' + expStamp();
+  var ok1 = downloadFile(base + '.json', JSON.stringify(pack, null, 2), 'application/json;charset=utf-8');
+  var ok2 = downloadFile(base + '.txt', packToTxt(pack), 'text/plain;charset=utf-8');
+  closeModal();
+  if (ok1 || ok2) {
+    toast('已导出 ' + pack.convs.length + ' 个会话 / ' + packMsgCount(pack) + ' 条消息');
+  }
+}
+// ---- 读取聊天记录弹窗 ----
+function isPack(o) {
+  if (!o || typeof o !== 'object') return false;
+  if (o.format === 'lt_rec') return true;
+  return Array.isArray(o.convs) && o.convs.some(function (c) { return c && Array.isArray(c.msgs); });
+}
+function normPack(o) {
+  var list = [];
+  (o.convs || []).forEach(function (c) {
+    if (!c || !c.conv || !Array.isArray(c.msgs)) return;
+    var msgs = [];
+    c.msgs.forEach(function (m) {
+      if (m == null) return;
+      if (typeof m === 'string') { msgs.push({ from: '', text: m, time: null, att: null, revoked: false }); return; }
+      msgs.push({
+        id: m.id != null ? m.id : null,
+        from: m.from || m.sender || userName(m.from_id) || '',
+        from_id: m.from_id || null,
+        text: String(m.text || ''),
+        time: m.time || m.created_at || null,
+        att: m.att || null,
+        revoked: !!m.revoked,
+        quote_id: m.quote_id || null,
+        at: Array.isArray(m.at) ? m.at : [],
+      });
+    });
+    if (!msgs.length) return;
+    list.push({
+      conv: c.conv, type: c.type || (String(c.conv).indexOf('g:') === 0 ? 'group' : 'private'),
+      title: c.title || c.conv, msgCount: msgs.length, msgs: msgs,
+    });
+  });
+  return { owner: o.owner || {}, exportedAt: o.exportedAt || null, convs: list };
+}
+function openImportDlg() {
+  closePops();
+  openDlg('读取聊天记录', ''
+    + '<div style="font-size:12px;color:var(--tx2);line-height:1.6">选择之前用「导出聊天记录」生成的 <b>.json</b> 文件，先预览再导入。'
+    + '导入是<b>只读合并</b>：按消息 ID 去重，只在自己这边补上缺失的旧消息，<b>不会上传、不会改动云端数据</b>，也不影响别人。</div>'
+    + '<div class="drow" style="margin-top:14px">'
+    + '<button class="dbtn" id="impPick"><span class="di">📄</span><span class="dt">选择 .json 文件</span><span class="dd">从导出包还原</span></button>'
+    + '<button class="dbtn" id="impPaste"><span class="di">📋</span><span class="dt">粘贴 JSON 内容</span><span class="dd">直接把内容贴进来</span></button>'
+    + '</div>'
+    + '<input type="file" id="impFile" accept=".json,application/json" style="display:none">'
+    + '<div id="impArea"></div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn gh" id="impCancel">关闭</button></div>');
+  $('#impCancel').onclick = closeModal;
+  var file = $('#impFile');
+  $('#impPick').onclick = function () { file.value = ''; file.click(); };
+  file.onchange = function () {
+    var f = file.files && file.files[0];
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () { parseAndPreview(String(rd.result), f.name); };
+    rd.onerror = function () { $('#impArea').innerHTML = '<div class="sprev" style="color:var(--danger)">文件读取失败</div>'; };
+    rd.readAsText(f, 'utf-8');
+  };
+  $('#impPaste').onclick = function () {
+    $('#impArea').innerHTML = ''
+      + '<textarea class="impbox" id="impText" placeholder="把导出的 JSON 内容粘贴到这里…"></textarea>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" id="impGo">解析预览</button></div>';
+    $('#impGo').onclick = function () { parseAndPreview($('#impText').value, '粘贴内容'); };
+  };
+}
+function parseAndPreview(text, srcName) {
+  var area = $('#impArea');
+  var o;
+  try { o = JSON.parse(text); }
+  catch (e) { area.innerHTML = '<div class="sprev" style="color:var(--danger)">不是合法的 JSON 文件：' + esc(e.message || '解析失败') + '</div>'; return; }
+  if (!isPack(o)) { area.innerHTML = '<div class="sprev" style="color:var(--danger)">不认识的文件格式：不是 LanTalk 导出的聊天记录包。</div>'; return; }
+  var pack = normPack(o);
+  if (!pack.convs.length) { area.innerHTML = '<div class="sprev" style="color:var(--danger)">这个包里没有消息。</div>'; return; }
+  var total = 0, rows = '';
+  pack.convs.forEach(function (c) {
+    total += c.msgCount;
+    var local = (S.msgs[c.conv] || []).length;
+    var newest = lastTime(c.msgs);
+    var isCur = c.conv === S.cur;
+    rows += '<div>' + esc(c.title) + '　<span style="color:var(--tx3)">' + c.msgCount + ' 条'
+      + (newest ? '　至 ' + esc(String(newest).slice(0, 16).replace('T', ' ')) : '')
+      + (isCur && local ? '　（当前会话已载入 ' + local + ' 条）' : '') + '</span></div>';
+  });
+  var oldest = '', newest = '';
+  pack.convs.forEach(function (c) {
+    c.msgs.forEach(function (m) {
+      if (!m.time) return;
+      if (!oldest || m.time < oldest) oldest = m.time;
+      if (!newest || m.time > newest) newest = m.time;
+    });
+  });
+  area.innerHTML = ''
+    + '<div class="sprev">'
+    + '<table>'
+    + '<tr><td>来源</td><td>' + esc(srcName) + '</td></tr>'
+    + '<tr><td>导出账号</td><td>' + esc(pack.owner.nickname || pack.owner.id || '未知') + (pack.exportedAt ? '　<span style="color:var(--tx3)">' + esc(String(pack.exportedAt).slice(0, 16).replace('T', ' ')) + '</span>' : '') + '</td></tr>'
+    + '<tr><td>会话 / 消息</td><td><b>' + pack.convs.length + '</b> 个会话，<b>' + total + '</b> 条消息</td></tr>'
+    + (oldest ? '<tr><td>时间范围</td><td>' + esc(String(oldest).slice(0, 16).replace('T', ' ')) + ' ~ ' + esc(String(newest).slice(0, 16).replace('T', ' ')) + '</td></tr>' : '')
+    + '</table>'
+    + '<div class="sc">' + rows + '</div>'
+    + '</div>'
+    + '<div style="font-size:11px;color:var(--tx3);margin-top:10px;line-height:1.6">导入后这些消息以只读方式补进本地记录，仅你本人可见、不上传云端；记录会保存在本机浏览器（约 1.5MB 上限），换设备或清缓存后需重新导入。</div>'
+    + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">'
+    + '<button class="btn gh" id="impCancel2">取消</button>'
+    + '<button class="btn" id="impDo">确认导入</button></div>';
+  $('#impCancel2').onclick = closeModal;
+  $('#impDo').onclick = function () { doImport(pack); };
+}
+function doImport(pack) {
+  var added = 0, dup = 0, convTouched = 0;
+  pack.convs.forEach(function (c) {
+    var arr = S.msgs[c.conv];
+    var seen = {};
+    if (arr) arr.forEach(function (m) { seen[m.id] = 1; });
+    var add = [];
+    c.msgs.forEach(function (m) {
+      if (m.id == null) return;
+      if (seen[m.id]) { dup++; return; }
+      if (added + add.length >= IMP_MAX) return;
+      seen[m.id] = 1;
+      add.push({
+        id: m.id,
+        conv: c.conv,
+        sender_id: m.from_id || null,
+        text: m.text,
+        att: m.att,
+        quote_id: m.quote_id,
+        revoked: m.revoked,
+        at: m.at,
+        created_at: m.time,
+        __local: 1,
+        __from: m.from || '历史记录',
+      });
+    });
+    if (!add.length) return;
+    convTouched++;
+    var merged = (arr || []).concat(add);
+    merged.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
+    // 每会话最多保留 3000 条，优先保留最新的
+    if (merged.length > 3000) merged = merged.slice(merged.length - 3000);
+    S.msgs[c.conv] = merged;
+    S.impLoaded = S.impLoaded || {};
+    S.impLoaded[c.conv] = 1;
+    added += add.length;
+  });
+  // 把导入出来的会话也挂进会话列表（并记住，防止轮询重建列表后消失）
+  S.localConvs = S.localConvs || {};
+  pack.convs.forEach(function (c) {
+    if (cm()[c.conv]) return;
+    S.localConvs[c.conv] = { title: c.title, type: c.type, id: convPeer(c) };
+    S.convs.push({
+      conv: c.conv, type: c.type, id: convPeer(c),
+      name: c.title, avatar: '', color: '#8a8f99',
+      isFriend: false, muted: false, last: null, localOnly: true,
+    });
+  });
+  storeImport(pack);
+  closeModal();
+  renderConvs();
+  if (S.cur && S.msgs[S.cur]) renderMsgs('keep');
+  toast('导入完成：新增 ' + added + ' 条，去重跳过 ' + dup + ' 条，覆盖 ' + convTouched + ' 个会话');
+}
+// ---------- 导入记录的本地持久化（仅存自己浏览器，不上传） ----------
+var IMP_STORE_KEY = 'lt_imports_v1';
+var IMP_STORE_MAX = 1500000;   // 本地最多缓存约 1.5MB 导入包
+function storeImport(pack) {
+  try {
+    var box = [];
+    try { box = JSON.parse(localStorage.getItem(IMP_STORE_KEY) || '[]'); } catch (e) { box = []; }
+    if (!Array.isArray(box)) box = [];
+    var text = JSON.stringify(pack);
+    if (text.length > IMP_STORE_MAX / 2) { toast('记录包较大，仅本次会话内生效（未存本机）'); return; }
+    // 同一个包（同一导出时间）不重复存
+    box = box.filter(function (p) { return !p || p.exportedAt !== pack.exportedAt; });
+    box.push(pack);
+    while (box.length > 1 && JSON.stringify(box).length > IMP_STORE_MAX) box.shift();
+    localStorage.setItem(IMP_STORE_KEY, JSON.stringify(box));
+  } catch (e) { /* 存储满/隐私模式：忽略，仅本次会话生效 */ }
+}
+function applyStoredImports() {
+  var box;
+  try { box = JSON.parse(localStorage.getItem(IMP_STORE_KEY) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(box) || !box.length) return;
+  S.localConvs = S.localConvs || {};
+  var n = 0;
+  box.forEach(function (pack) {
+    if (!pack || !Array.isArray(pack.convs)) return;
+    pack.convs.forEach(function (c) {
+      if (!c || !c.conv || !Array.isArray(c.msgs)) return;
+      if (!cm()[c.conv]) S.localConvs[c.conv] = { title: c.title, type: c.type, id: convPeer(c) };
+      var arr = S.msgs[c.conv] = S.msgs[c.conv] || [];
+      var seen = {};
+      arr.forEach(function (m) { seen[m.id] = 1; });
+      c.msgs.forEach(function (m) {
+        if (m.id == null || seen[m.id]) return;
+        seen[m.id] = 1;
+        arr.push({
+          id: m.id, conv: c.conv, sender_id: m.from_id || null, text: m.text,
+          att: m.att, quote_id: m.quote_id, revoked: m.revoked, at: m.at,
+          created_at: m.time, __local: 1, __from: m.from || '历史记录',
+        });
+        n++;
+      });
+      arr.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
+      S.impLoaded = S.impLoaded || {};
+      S.impLoaded[c.conv] = 1;
+    });
+  });
+}
+// 从导入的会话标记里反推对方/群的 id
+function convPeer(c) {
+  if (c.conv === 'hall') return 'hall';
+  if (String(c.conv).indexOf('g:') === 0) return String(c.conv).slice(2);
+  if (String(c.conv).indexOf('p:') === 0) {
+    var parts = String(c.conv).slice(2).split('~');
+    return parts.filter(function (u) { return u !== S.uid; })[0] || parts[0];
+  }
+  return c.conv;
+}
+
 // 手机端侧栏 ☰ / 遮罩
 var sideBtn = $('#bSide');
 if (sideBtn) sideBtn.onclick = function () {
