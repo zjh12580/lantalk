@@ -70,11 +70,11 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 .tbadge{display:inline-block;margin-left:3px;background:var(--danger);color:#fff;border-radius:9px;padding:0 5px;font-size:10px;line-height:15px}
 .list{flex:1;overflow-y:auto}
 .foot{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;font-size:11px;color:var(--tx3);border-top:1px solid var(--bd)}
-/* 左下角设置按钮（40×40 → 32×32，图标 34px → 27px，整体缩小 20%） */
-.foot .ib{width:32px;height:32px;font-size:17px;border-radius:8px;flex-shrink:0}
+/* 左下角设置按钮（原始 40×40 → 32×32 → 28×28，图标 34px → 27px → 24px，累计缩小约 30%） */
+.foot .ib{width:28px;height:28px;font-size:15px;border-radius:7px;flex-shrink:0}
 .foot .ib:hover{background:var(--hover)}
 .foot .ib:active{transform:scale(.94)}
-.foot .sico{font-size:27px;line-height:1}
+.foot .sico{font-size:24px;line-height:1}
 /* 左下角设置弹层 */
 .spop{width:232px;padding:6px}
 .spop .srow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;font-size:13px;cursor:pointer;border-radius:8px;color:var(--tx)}
@@ -1272,6 +1272,9 @@ function onNew(m) {
   var c = cm()[m.conv];
   if (!c) { buildConvs(); c = cm()[m.conv]; if (!c) return; }
   c.last = m;
+  // 侧栏最新消息要即时同步（否则当前会话里对方发来的消息，左侧列表那行还是旧的）。
+  // 无论是否当前会话都重渲染一次；列表重排由 renderConvs 依据 last.id 完成。
+  renderConvs();
   if (m.sender_id === S.uid) {
     if (pushMsg(m.conv, m) && m.conv === S.cur) renderMsgs();
     maybeBotReply(m);   // 自己 @ 小美 / 私聊小美时，由 leader 端代她回复
@@ -1484,6 +1487,10 @@ window.addEventListener('focus', function () {
 });
 function renderMsgs(scroll) {
   var box = $('#mList');
+  // 关键：在替换内容「之前」先判定用户是否本来就在底部（此刻的数据是旧内容，scrollHeight 与视口匹配）。
+  // 替换后再用新内容的高度去算，会因为内容变高而误判成"用户往上翻了"，从而不再跟随 → 表现为收到消息不自动滚到底。
+  var distBefore = box.scrollHeight - box.scrollTop - box.clientHeight;
+  var wasAtBottom = distBefore < 80;
   var prevH = box.scrollHeight;
   var list = S.msgs[S.cur] || [];
   var html = '';
@@ -1574,9 +1581,8 @@ function renderMsgs(scroll) {
     // 显式要求贴底（首次打开会话 / 自己发送）
     box.scrollTop = box.scrollHeight;
   } else {
-    // 轮询等被动刷新：只有原本就贴底（或接近底部）时才跟随，避免把正在看历史的人拽走
-    var dist = box.scrollHeight - box.scrollTop - box.clientHeight;
-    if (dist < 80) box.scrollTop = box.scrollHeight;
+    // 被动刷新（轮询/新消息）：用「替换前」判定的滚动意图。原本贴底则继续贴底；正在看历史则原地不动。
+    if (wasAtBottom) box.scrollTop = box.scrollHeight;
   }
 }
 function fillFile(el) {
