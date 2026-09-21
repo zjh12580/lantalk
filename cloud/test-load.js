@@ -672,26 +672,46 @@ function makeStub() {
     log(txt.indexOf('再来一局') >= 0 && txt.indexOf('其他游戏') >= 0 && txt.indexOf('结束游戏') >= 0,
       '赢家（发起方）看到「再来一局 / 其他游戏 / 结束游戏」', txt.replace(/\s+/g, ' ').slice(0, 50));
 
-    // 8b) 对方视角：应显示「游戏房间清扫中~~~」而不是操作按钮
+    // 8b) 对方视角（非发起方）：应显示「游戏房间清扫中~~~」而不是操作按钮
+    //     当前测试用户是发起方，直接改库看不出这一分支 —— 用内部工具验证渲染产物。
     {
-      const guestRow = DATA.games.find((g) => g.id === gidStr);
-      if (guestRow) { guestRow.winner = 'u_a'; }   // 换成对方赢，我这侧就是败方
-      await sleep(3200);
-      const t2 = D.querySelector('#groom') ? D.querySelector('#groom').textContent : '';
-      log(t2.indexOf('游戏房间清扫中') >= 0, '败方/对方视角显示「游戏房间清扫中~~~」', t2.replace(/\s+/g, ' ').slice(0, 50));
-      if (guestRow) { guestRow.winner = 'u_test'; }
-      await sleep(3200);
+      const gRow = DATA.games.find((x) => x.id === gidStr);
+      const S = w.LT.S;
+      if (gRow && S) {
+        const savedUid = S.uid;
+        S.uid = 'u_a';            // 伪装成「被邀请的那一方」
+        S.gameOpen = gidStr;
+        try {
+          w.LT.renderRoom && w.LT.renderRoom();
+          const t2 = D.querySelector('#groom') ? D.querySelector('#groom').textContent : '';
+          log(t2.indexOf('游戏房间清扫中') >= 0,
+            '非发起方视角显示「游戏房间清扫中~~~」', t2.replace(/\s+/g, ' ').slice(0, 50));
+        } finally {
+          S.uid = savedUid;       // 还原身份，别污染后续用例
+        }
+      } else {
+        log(false, '非发起方视角显示「游戏房间清扫中~~~」', '缺少游戏行或 S');
+      }
+      await sleep(400);
     }
 
     // 8c) 关键回归：房间关闭后，聊天区的邀请卡片也必须跟著状态实时更新
     //     （曾因 applyGames 未触发 renderMsgs 导致卡片永远停在「等待对方加入」）
     {
-      const exitBtn0 = D.querySelector('#grExit');
-      if (exitBtn0) exitBtn0.click();
-      await sleep(250);
-      const cf = D.querySelector('#cfOk') || D.querySelector('.dlg .btn.primary');
-      if (cf) cf.click();
-      await sleep(400);
+      if (w.LT.close) w.LT.close();          // 先确保没有残留弹窗挡住
+      // 直接改库把对局置为 over，避免依赖被 8b 污染过的 #grExit 绑定
+      const gRowC = DATA.games.find((x) => x.id === gidStr);
+      if (gRowC) gRowC.status = 'over';      // over → 非参与方看到的卡片应为「已开始或已过期」
+      await sleep(3200);
+      const roomC = D.querySelector('#groom');
+      if (roomC && !roomC.classList.contains('hidden')) {
+        const ex = D.querySelector('#grExit');
+        if (ex) ex.click();
+        await sleep(250);
+        const cf = D.querySelector('#cfOk') || D.querySelector('.dlg .btn.primary');
+        if (cf) cf.click();
+        await sleep(500);
+      }
       const cardsAfter = D.querySelectorAll('#mList .ginvite');
       const bAfter = cardsAfter.length ? cardsAfter[cardsAfter.length - 1].querySelector('.gbtn') : null;
       log(!!bAfter && bAfter.classList.contains('dis') && bAfter.textContent.indexOf('已开始或已过期') >= 0,
@@ -702,9 +722,12 @@ function makeStub() {
     {
       const g2 = DATA.games.find((x) => x.id === gidStr);
       if (g2) { g2.status = 'left'; g2.winner = ''; }
+      // 确保浮层处于打开态（8b 里可能已切走）
+      if (w.LT.openRoom) w.LT.openRoom(gidStr);
       await sleep(3200);
       const roomL = D.querySelector('#groom');
-      log(!!roomL && /倒计时/.test(roomL.textContent), '对方离开 → 浮层出现「倒计时 … 秒退出」文案');
+      log(!!roomL && /倒计时/.test(roomL.textContent), '对方离开 → 浮层出现「倒计时 … 秒退出」文案',
+        roomL ? roomL.textContent.replace(/\s+/g, ' ').slice(0, 60) : '无浮层');
       const cnt = D.querySelector('#grCnt');
       log(!!cnt, '倒计时数字元素存在');
       await sleep(4200);   // 等满 3 秒自动退出

@@ -2374,7 +2374,15 @@ document.addEventListener('paste', function (e) {
 // ---------- 弹窗 ----------
 function openModal(html) { var m = $('#modal'); m.className = 'modal'; m.innerHTML = html; $('#mask').classList.remove('hidden'); }
 function closeModal() { $('#mask').classList.add('hidden'); }
-window.LT = { close: closeModal, get GB() { return GB; }, get S() { return S; } };
+window.LT = {
+  close: closeModal,
+  get GB() { return GB; },
+  get S() { return S; },
+  // 供测试断言游戏渲染分支（非发起方「清扫中」等）
+  renderRoom: function () { return renderRoom(); },
+  openRoom: function (id) { return openRoom(id); },
+  get GAME_KINDS() { return GAME_KINDS; },
+};
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
 function promptBox(title, val, ta, onOk) {
   openModal('<h3>' + esc(title) + '</h3>'
