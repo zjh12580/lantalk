@@ -646,6 +646,21 @@ function makeStub() {
     log(!!myBtn && myBtn.classList.contains('dis') && myBtn.textContent.indexOf('等待对方加入') >= 0,
       '发起方视角：按钮显示「等待对方加入」且置灰', myBtn ? myBtn.textContent : 'none');
 
+    // 4b) 卡片标题必须是「真 SVG 图标 + 纯文本」，不能把 SVG 源码显示成标签文本
+    {
+      const c0 = inv.length ? inv[inv.length - 1] : null;
+      const git = c0 ? c0.querySelector('.git') : null;
+      log(!!git && git.querySelectorAll('svg').length === 1,
+        '邀请卡片标题内联了 1 个真实 SVG 图标', git ? git.querySelectorAll('svg').length : '无卡片');
+      log(!!git && git.textContent.indexOf('<svg') < 0,
+        '邀请卡片标题没有把 SVG 当文本显示（无 "<svg" 字面量）', git ? git.textContent.slice(0, 30) : '无卡片');
+      log(!!git && /五子棋邀请/.test(git.textContent),
+        '邀请卡片标题文本为「五子棋邀请」', git ? git.textContent.trim() : '无卡片');
+    }
+
+    // 4c) 对局页右上角有 ✕ 关闭按钮（行为验证见文末「等待态点 ✕」用例）
+    log(!!D.querySelector('#grExit'), '对局页右上角有 ✕ 关闭按钮');
+
     const gidStr = gameRow.id;
 
     // 5) 模拟「对方」抢到对局（直接改库，等同另一客户端 join），本地轮询应同步
@@ -790,6 +805,59 @@ function makeStub() {
       const b10 = cards10.length ? cards10[cards10.length - 1].querySelector('.gbtn') : null;
       log(!!b10 && b10.classList.contains('dis') && b10.textContent.indexOf('已开始或已过期') >= 0,
         '离开后邀请卡片置灰「游戏已开始或已过期」', b10 ? b10.textContent : 'none');
+    }
+
+    // 11) 等待态点右上角 ✕ → 不弹二次确认框、直接关页、本局置 over
+    {
+      const xid = 'gm_xclose';
+      DATA.games.push({ id: xid, conv: 'g:hall', kind: 'gomoku', host_id: 'u_test', host_name: '云端测试', guest_id: '', guest_name: '', status: 'waiting', turn: 'host', board: [], moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      DATA.messages.push({ id: ++seq, conv: 'g:hall', sender_id: 'u_test', sender_name: '云端测试', sender_avatar: '', sender_color: '#888', type: 'game', text: xid, mentions: [], created_at: new Date().toISOString() });
+      await sleep(3200);
+      if (w.LT.openRoom) w.LT.openRoom(xid);
+      await sleep(400);
+      const exW = D.querySelector('#grExit');
+      log(!!exW, '等待态对局页仍有 ✕ 关闭按钮');
+      if (exW) {
+        exW.click();
+        await sleep(400);
+        // 关闭前的确认遮罩 z-index 必须高于对局页，否则会被盖住看不见
+        var maskX = D.querySelector('#mask');
+        log(!maskX || maskX.classList.contains('hidden'), '等待态点 ✕ 不弹二次确认框（直接退出）', maskX && !maskX.classList.contains('hidden') ? '弹了' : '无弹窗');
+        await sleep(1200);
+        const roomX = D.querySelector('#groom');
+        log(!roomX || roomX.classList.contains('hidden'), '等待态点 ✕ 后对局页关闭');
+        log(w.LT.S.gameOpen === null, '等待态点 ✕ 后清空 S.gameOpen', String(w.LT.S.gameOpen));
+        const rowX = DATA.games.find((x) => x.id === xid);
+        log(!!rowX && rowX.status === 'over', '等待态点 ✕ 后本局置 over（过期作废）', rowX ? rowX.status : '被删除');
+      }
+    }
+
+    // 12) 对局中点 ✕ 仍需二次确认（防误触），且确认框必须盖在对局页之上
+    {
+      const pid = 'gm_pclose';
+      DATA.games.push({ id: pid, conv: 'g:hall', kind: 'gomoku', host_id: 'u_test', host_name: '云端测试', guest_id: 'u_a', guest_name: '甲', status: 'playing', turn: 'host', board: [], moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      DATA.messages.push({ id: ++seq, conv: 'g:hall', sender_id: 'u_test', sender_name: '云端测试', sender_avatar: '', sender_color: '#888', type: 'game', text: pid, mentions: [], created_at: new Date().toISOString() });
+      await sleep(3200);
+      if (w.LT.openRoom) w.LT.openRoom(pid);
+      await sleep(400);
+      const exP = D.querySelector('#grExit');
+      if (exP) exP.click();
+      await sleep(400);
+      const maskP = D.querySelector('#mask');
+      const maskPOpen = !!maskP && !maskP.classList.contains('hidden');
+      log(maskPOpen, '对局中点 ✕ 弹出二次确认框', maskPOpen ? '有' : '无');
+      {
+        // 确认框必须压过对局页（.groom z-index:120）
+        const z = maskPOpen ? w.getComputedStyle(maskP).zIndex : '-';
+        log(Number(z) > 120, '确认框 z-index 高于对局页（否则会被盖住看不见）', 'mask z=' + z + ' / groom z=120');
+      }
+      const cfP = D.querySelector('#cfOk');
+      if (cfP) cfP.click();
+      await sleep(1200);
+      const roomP = D.querySelector('#groom');
+      log(!roomP || roomP.classList.contains('hidden'), '对局中确认离开后对局页关闭');
+      const rowP = DATA.games.find((x) => x.id === pid);
+      log(!!rowP && rowP.status === 'left', '对局中离开置为 left（保留供对方看倒计时）', rowP ? rowP.status : '被删除');
     }
   }
 
