@@ -197,21 +197,34 @@ function makeStub() {
 
   // 1. 未设昵称 -> 停在昵称页
   log(!D.querySelector('#join').classList.contains('hidden'), '已登录但未设昵称：显示昵称设置页');
-  log(D.querySelectorAll('#jEmo span').length > 20, '表情头像候选已渲染', D.querySelectorAll('#jEmo span').length);
+  log(D.querySelectorAll('#jEmo span').length > 100, '表情头像候选已扩容到 100+', D.querySelectorAll('#jEmo span').length);
+  log(D.querySelectorAll('#jEmo .emo-sec').length >= 4, '表情按分组展示（表情/手势/动物/食物/符号）', D.querySelectorAll('#jEmo .emo-sec').length);
+  log(D.querySelectorAll('#jColor i').length >= 15, '昵称页提供 15+ 款头像背景色', D.querySelectorAll('#jColor i').length);
 
   // 2. 设置昵称进入
   D.querySelector('#jName').value = '云端测试';
   D.querySelector('#jName').dispatchEvent(new w.Event('input', { bubbles: true }));
-  D.querySelectorAll('#jEmo span')[5].click();
+  const pickedEmoji = D.querySelectorAll('#jEmo span')[1].dataset.e;
+  D.querySelectorAll('#jEmo span')[1].click();
+  // 选一个非默认背景色，验证会被写入 profiles
+  const pickedColor = D.querySelectorAll('#jColor i')[3].dataset.c;
+  D.querySelectorAll('#jColor i')[3].click();
+  await sleep(60);
+  log(D.querySelector('#jPrev').style.background !== '' , '选色后头像预览底色跟着变', D.querySelector('#jPrev').style.background);
   D.querySelector('#jGo').click();
   await sleep(800);
 
   log(D.querySelector('#join').classList.contains('hidden'), '设置昵称后进入主界面');
   const mine = DATA.profiles.filter((p) => p.id === 'u_test');
-  log(mine.length === 1 && mine[0].nickname === '云端测试' && mine[0].avatar === '😊', '昵称与表情头像已写入云端 profiles', JSON.stringify(mine.map((p) => p.nickname + p.avatar)));
+  log(mine.length === 1 && mine[0].nickname === '云端测试' && mine[0].avatar === pickedEmoji, '昵称与表情头像已写入云端 profiles', JSON.stringify(mine.map((p) => p.nickname + p.avatar)));
+  log(mine.length === 1 && mine[0].color === pickedColor, '所选头像背景色已写入 profiles', mine[0] && mine[0].color);
   log(DATA.group_members.some((m) => m.group_id === 'hall' && m.user_id === 'u_test'), '自动加入大厅');
   log(D.querySelector('#cName').textContent === '大厅', '默认打开大厅会话', D.querySelector('#cName').textContent);
   log(D.querySelector('#cList').textContent.indexOf('大厅') >= 0, '侧栏显示大厅');
+  // 大厅专属头像：侧栏大厅条目应为 🏛️ + 品牌绿 #07c160
+  const hallAvEl = D.querySelector('#cList .conv[data-c="g:hall"] .av');
+  log(!!hallAvEl && hallAvEl.textContent.indexOf('🏛') >= 0, '大厅使用专属头像图形 🏛️', hallAvEl ? hallAvEl.textContent : 'none');
+  log(!!hallAvEl && /07c160/i.test(hallAvEl.getAttribute('style') || ''), '大厅专属头像使用品牌绿底色', hallAvEl ? hallAvEl.getAttribute('style') : 'none');
 
   // 3. 发消息
   D.querySelector('#input').value = '云端第一条消息';
@@ -602,6 +615,20 @@ function makeStub() {
   log(sideEl.classList.contains('open') && !D.querySelector('#sideMask').classList.contains('hidden'), '点 ☰ 展开侧栏并显示遮罩');
   D.querySelector('#sideMask').click();
   log(!sideEl.classList.contains('open'), '点遮罩收起侧栏');
+
+  // ===== 本轮：资料页头像可选背景色 =====
+  D.querySelector('#meBox').click();
+  await sleep(400);
+  log(D.querySelector('#mColor') !== null && D.querySelectorAll('#mColor i').length >= 15, '我的资料弹窗提供 15+ 款背景色', D.querySelectorAll('#mColor i').length);
+  log(D.querySelectorAll('#mEmo span').length > 100, '我的资料弹窗表情也是扩容版', D.querySelectorAll('#mEmo span').length);
+  const newC = D.querySelectorAll('#mColor i')[10].dataset.c;
+  D.querySelectorAll('#mColor i')[10].click();
+  await sleep(80);
+  log(D.querySelector('#mPrev .av').getAttribute('style').indexOf(newC) >= 0 || D.querySelector('#mPrev .av').getAttribute('style').indexOf(newC.toLowerCase()) >= 0,
+    '选色后资料弹窗预览头像底色已更新', D.querySelector('#mPrev .av').getAttribute('style'));
+  D.querySelector('#mSave').click();
+  await sleep(900);
+  log(DATA.profiles.filter((p) => p.id === 'u_test')[0].color === newC, '资料页保存后新底色写入云端', DATA.profiles.filter((p) => p.id === 'u_test')[0].color);
 
   // ===== 本轮修复：侧栏「未读红点」与「最新消息预览」同步 =====
   // 场景：与「甲」私聊，切到大厅；甲连发 2 条 -> 侧栏该会话应出现红点 2 且预览为最后一条

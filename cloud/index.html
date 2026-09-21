@@ -53,6 +53,15 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 .emo-grid span{font-size:22px;text-align:center;cursor:pointer;padding:4px;border-radius:6px;line-height:1.2}
 .emo-grid span:hover{background:var(--hover)}
 .emo-grid span.on{background:var(--brand)}
+/* 头像颜色选择：十几个经典色，选中打勾 */
+.color-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:7px;padding:8px;background:var(--bg3);border-radius:10px;margin-top:6px}
+.color-grid i{height:26px;border-radius:8px;cursor:pointer;position:relative;transition:transform .1s ease}
+.color-grid i:hover{transform:scale(1.1)}
+.color-grid i.on{box-shadow:0 0 0 2px var(--bg3),0 0 0 4px var(--tx1)}
+.color-grid i.on::after{content:'✓';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,.4)}
+/* 表情分组标题 */
+.emo-sec{font-size:11px;color:var(--tx3);margin:8px 0 -2px;font-weight:500}
+.emo-grid.g-sm{grid-template-columns:repeat(9,1fr)}
 .join-err{color:var(--danger);font-size:13px;min-height:20px;margin-top:8px}
 
 .app{display:flex;height:100%}
@@ -397,7 +406,9 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
     </div>
     <input class="inp" id="jName" placeholder="请输入昵称（1-16 字）" maxlength="16" autocomplete="off">
     <label style="display:block;font-size:12px;color:var(--tx2);margin:14px 0 0">选择表情头像（不选则用昵称第一个字）</label>
-    <div class="emo-grid" id="jEmo"></div>
+    <div id="jEmo"></div>
+    <label style="display:block;font-size:12px;color:var(--tx2);margin:14px 0 0">头像背景色</label>
+    <div class="color-grid" id="jColor"></div>
     <div class="join-err" id="jErr"></div>
     <button class="btn primary block" id="jGo">进入聊天</button>
     <p style="font-size:12px;color:var(--tx3);margin:16px 0 0;line-height:1.6" id="jTip"></p>
@@ -499,6 +510,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 'use strict';
 var $ = function (s) { return document.querySelector(s); };
 var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+var $qa = function (root, s) { return root ? Array.prototype.slice.call(root.querySelectorAll(s)) : []; };
 var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); };
 
 // 云配置：来自 workbuddy_cloud_service 返回的 publicConfig
@@ -513,8 +525,24 @@ var CLOUD = window.WorkBuddyCloud.createWorkBuddyCloud({ endpoint: ENDPOINT, pub
 var db = CLOUD.database;
 var st = CLOUD.storage;
 
-var EMOJIS = ['😀','😄','😁','😂','🤣','😊','😍','😘','😎','🤔','😅','😭','🥳','😴','🤠','🤝','👍','👏','🙏','💪','🎉','❤️','🔥','✨','🌙','☕','🍺','🐶','🐱','🐼','🦊','🐯','🦁','🐸','🚀','💡','⭐','🍎','🍔','🎂','⚽','🎮','🎧','📚','🔧','🧠','👑'];
-var PALETTE = ['#e8644a','#f0a03c','#3ba55d','#3d8bfd','#8b5cf6','#e0518f','#0aa4a4','#c0842f','#5b8def','#d4756b'];
+// 可选表情头像（分组，便于在弹窗里小节展示）
+var EMOJI_GROUPS = [
+  { name: '表情', list: ['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','😉','😍','🥰','😘','😗','😋','😜','🤪','😝','🤗','🤔','🤨','😐','😴','😷','🤒','🥳','😎','🤩','😢','😭','😤','😠','😱','😳','🥺','😈','🤡','💀','👻','👽','🤖','🎃'] },
+  { name: '手势', list: ['👍','👎','👏','🙏','🤝','💪','👌','✌️','🤞','🤟','🤙','👋','🖐️','✊','👊','🤛','🫶','👐'] },
+  { name: '动物', list: ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🦆','🦉','🦄','🐝','🦋','🐢','🐙','🐬','🐳','🦈','🐊','🦖'] },
+  { name: '食物', list: ['🍎','🍊','🍋','🍉','🍇','🍓','🍒','🍑','🥝','🍍','🥑','🍅','🥕','🌽','🍞','🧀','🍔','🍟','🍕','🌮','🍣','🍜','🍚','🍰','🎂','🍩','🍪','🍫','🍬','☕','🍺','🍻','🥂'] },
+  { name: '自然与符号', list: ['⭐','🌟','✨','⚡','🔥','💧','🌈','☀️','🌙','⛅','❄️','🌸','🌺','🌻','🌹','🍀','🌵','🌴','🍁','🌊','🚀','✈️','🚗','🚲','⚽','🏀','🎮','🎧','🎸','🎲','💡','📚','🎓','🏆','🎁','💎','👑','🧠','🛡️','⚔️'] },
+];
+var EMOJIS = (function () { var a = []; EMOJI_GROUPS.forEach(function (g) { a = a.concat(g.list); }); return a; })();
+// 头像背景色（十几款经典配色，替换原来单一粉色）
+var AVATAR_COLORS = [
+  '#e8644a', '#f0a03c', '#f2c94c', '#7cb342', '#3ba55d', '#0aa4a4',
+  '#3d8bfd', '#5b8def', '#8b5cf6', '#a855f7', '#e0518f', '#f06292',
+  '#c0842f', '#8d6e63', '#607d8b', '#455a64', '#ef5350', '#26a69a',
+];
+var PALETTE = AVATAR_COLORS;
+// 大厅专属头像（固定图形，与普通用户/群区分）
+var HALL_AVATAR = { emoji: '🏛️', color: '#07c160' };
 
 var S = {
   uid: null, me: null, profiles: {}, groups: [], members: {}, friends: [], reqs: [],
@@ -522,7 +550,7 @@ var S = {
   anim: {},             // 会话 -> 本次要播放入场动画的消息 id 集合（仅新消息，重渲染不闪）
   seenReqs: {}, seenFriends: {},
   reply: null, filter: 'all', q: '', info: false, theme: 'dark', sound: true,
-  pickAvatar: '', tickCount: 0, lastBeat: 0, busy: false,
+  pickAvatar: '', pickColor: '', tickCount: 0, lastBeat: 0, busy: false,
   attach: [],            // 待发送附件队列（粘贴/选择后先预览，点发送才上传）
   lastBotSaid: 0,        // 小美上次发言时间，用于防刷屏
   flashTimer: null,      // 未读红闪定时器
@@ -1005,6 +1033,15 @@ function remarkOf(pid) {
 }
 function displayName(pid) { return remarkOf(pid) || nameOf(pid); }
 function avOfUser(id, cls) { var p = S.profiles[id] || {}; return avOf(p.nickname || '?', p.avatar, p.color, cls); }
+// 会话头像：大厅使用专属头像（🏛️ + 品牌绿），群聊用群色+首字，私聊用对方资料
+function convAv(c, cls) {
+  if (!c) return avOf('?', '', '#888', cls);
+  if (c.type === 'group') {
+    if (c.isHall) return avOf('大厅', HALL_AVATAR.emoji, HALL_AVATAR.color, cls);
+    return avOf(c.name, '', c.color, cls);
+  }
+  return avOfUser(c.id, cls);
+}
 function mutedOf(gid) {
   var m = (S.members[gid] || []).indexOf(S.uid) >= 0;
   return m && (S.myMuted || {})[gid];
@@ -1107,33 +1144,67 @@ function showNick() {
   $('#auth').classList.add('hidden');
   $('#join').classList.remove('hidden');
   $('#app').classList.add('hidden');
+  if (!S.pickColor) S.pickColor = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
   renderJoinEmo();
   updatePrev();
 }
 $('#jName').addEventListener('input', updatePrev);
 function renderJoinEmo() {
-  $('#jEmo').innerHTML = EMOJIS.map(function (e) { return '<span data-e="' + e + '">' + e + '</span>'; }).join('');
-  $$('#jEmo span').forEach(function (s) {
+  $('#jEmo').innerHTML = emojiPickerHtml();
+  bindEmojiPicker($('#jEmo'), function (e) { S.pickAvatar = (S.pickAvatar === e) ? '' : e; }, function () { return S.pickAvatar; }, updatePrev);
+  $('#jColor').innerHTML = colorPickerHtml();
+  bindColorPicker($('#jColor'), function (c) { S.pickColor = c; updatePrev(); }, function () { return S.pickColor; });
+}
+// 分组表情选择器（返回 HTML 片段）
+function emojiPickerHtml() {
+  return EMOJI_GROUPS.map(function (g) {
+    return '<div class="emo-sec">' + esc(g.name) + '</div>'
+      + '<div class="emo-grid g-sm">' + g.list.map(function (e) { return '<span data-e="' + esc(e) + '">' + e + '</span>'; }).join('') + '</div>';
+  }).join('');
+}
+function bindEmojiPicker(root, onPick, getVal, after) {
+  if (!root) return;
+  $qa(root, 'span[data-e]').forEach(function (s) {
     s.onclick = function () {
-      S.pickAvatar = (S.pickAvatar === s.dataset.e) ? '' : s.dataset.e;
-      $$('#jEmo span').forEach(function (x) { x.className = (x.dataset.e === S.pickAvatar) ? 'on' : ''; });
-      updatePrev();
+      onPick(s.dataset.e);
+      syncEmojiPicker(root, getVal());
+      if (after) after();
     };
   });
+  syncEmojiPicker(root, getVal());
+}
+function syncEmojiPicker(root, val) {
+  $qa(root, 'span[data-e]').forEach(function (x) { x.className = (x.dataset.e === val) ? 'on' : ''; });
+}
+// 头像背景色选择器
+function colorPickerHtml() {
+  return AVATAR_COLORS.map(function (c) { return '<i data-c="' + esc(c) + '" style="background:' + esc(c) + '"></i>'; }).join('');
+}
+function bindColorPicker(root, onPick, getVal) {
+  if (!root) return;
+  $qa(root, 'i[data-c]').forEach(function (el) {
+    el.onclick = function () { onPick(el.dataset.c); syncColorPicker(root, getVal()); };
+  });
+  syncColorPicker(root, getVal());
+}
+function syncColorPicker(root, val) {
+  $qa(root, 'i[data-c]').forEach(function (x) { x.className = (x.dataset.c === val) ? 'on' : ''; });
 }
 function updatePrev() {
   var n = $('#jName').value.trim() || '你的昵称';
   $('#jPrevName').textContent = n;
   var el = $('#jPrev');
+  var color = S.pickColor || '#3d8bfd';
   el.textContent = S.pickAvatar || n.charAt(0).toUpperCase();
-  el.style.background = S.pickAvatar ? 'var(--bg3)' : '#3d8bfd';
+  el.style.background = color;   // 头像底色 = 所选颜色（有表情时也铺底色）
 }
 $('#jGo').onclick = function () {
   var name = $('#jName').value.trim();
   if (!name) { $('#jErr').textContent = '请输入昵称'; return; }
   $('#jErr').textContent = '';
   $('#jGo').textContent = '进入中…';
-  var color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+  // 用户选了底色就用它，否则随机给一个经典色
+  var color = S.pickColor || AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
   q(db.from('profiles').insert({ id: S.uid, nickname: name, avatar: S.pickAvatar || '', color: color, signature: '', last_seen: new Date().toISOString() }).select())
     .then(function (rows) {
       S.me = rows[0];
@@ -1629,7 +1700,7 @@ function renderConvs() {
   var body = reqHtml + (list.length ? list.map(function (c) {
     var u = S.unread[c.conv] || 0;
     return '<div class="conv' + (c.conv === S.cur ? ' on' : '') + '" data-c="' + esc(c.conv) + '">'
-      + (c.type === 'group' ? avOf(c.name, '', c.color) : avOfUser(c.id))
+      + convAv(c)
       + '<div class="cbody"><div class="ctop"><span class="cnm">' + esc(c.name) + '</span>'
       + '<span class="ctm">' + (c.last ? fmtList(c.last.created_at) : '') + '</span></div>'
       + '<div class="clast' + (c.atMe && u ? ' atme' : '') + '">' + esc(preview(c.last)) + '</div></div>'
@@ -2262,7 +2333,7 @@ function renderInfo() {
     var mem = S.members[c.id] || [];
     var isOwner = c.owner === S.uid;
     var g = S.groups.filter(function (x) { return x.id === c.id; })[0] || {};
-    bar.innerHTML = '<div class="ihead">' + avOf(c.name, '', c.color, 'l')
+    bar.innerHTML = '<div class="ihead">' + convAv(c, 'l')
       + '<div class="ibody">'
       + '<div class="inm" title="' + esc(c.name) + '">' + esc(c.name) + '</div>'
       + '<div class="istat"><span class="idot"></span>' + mem.length + ' 位成员</div>'
@@ -2377,23 +2448,25 @@ function renderInfo() {
 // 我的资料
 $('#meBox').onclick = function () {
   openModal('<h3>我的资料</h3>'
-    + '<div style="text-align:center;margin:10px 0">' + avOf(S.me.nickname, S.me.avatar, S.me.color, 'l') + '</div>'
+    + '<div style="text-align:center;margin:10px 0" id="mPrev">' + avOf(S.me.nickname, S.me.avatar, S.me.color, 'l') + '</div>'
     + '<label>昵称（全服唯一）</label><input class="inp" id="mName" value="' + esc(S.me.nickname) + '" maxlength="16">'
-    + '<label>头像（点击选择表情）</label><div class="emo-grid" id="mEmo"></div>'
+    + '<label>头像（点击选择表情，再选背景色）</label><div id="mEmo"></div>'
+    + '<label>头像背景色</label><div class="color-grid" id="mColor"></div>'
     + '<label>个性签名</label><input class="inp" id="mSig" value="' + esc(cleanSig(S.me.signature)) + '" placeholder="一句话介绍自己">'
     + '<div class="acts"><button class="btn" onclick="LT.close()">取消</button><button class="btn primary" id="mSave">保存</button></div>');
   var pick = S.me.avatar || '';
-  $('#mEmo').innerHTML = EMOJIS.map(function (e) { return '<span data-e="' + e + '" class="' + (e === pick ? 'on' : '') + '">' + e + '</span>'; }).join('');
-  $$('#mEmo span').forEach(function (s) {
-    s.onclick = function () {
-      pick = (pick === s.dataset.e) ? '' : s.dataset.e;
-      $$('#mEmo span').forEach(function (x) { x.className = (x.dataset.e === pick) ? 'on' : ''; });
-    };
-  });
+  var pickC = S.me.color || AVATAR_COLORS[0];
+  var mPrev = function () { $('#mPrev').innerHTML = avOf($('#mName').value.trim() || S.me.nickname, pick, pickC, 'l'); };
+  $('#mEmo').innerHTML = emojiPickerHtml();
+  bindEmojiPicker($('#mEmo'), function (e) { pick = (pick === e) ? '' : e; }, function () { return pick; }, mPrev);
+  $('#mColor').innerHTML = colorPickerHtml();
+  bindColorPicker($('#mColor'), function (c) { pickC = c; mPrev(); }, function () { return pickC; });
+  $('#mName').addEventListener('input', mPrev);
+  mPrev();
   $('#mSave').onclick = function () {
     var nm = $('#mName').value.trim();
     if (!nm) { toast('昵称不能为空', 'err'); return; }
-    q(db.from('profiles').update({ nickname: nm, avatar: pick, signature: $('#mSig').value }).eq('id', S.uid).select())
+    q(db.from('profiles').update({ nickname: nm, avatar: pick, color: pickC, signature: $('#mSig').value }).eq('id', S.uid).select())
       .then(function (rows) {
         S.me = rows[0] || S.me; closeModal(); renderMe(); refreshAll(); toast('已保存');
       })
