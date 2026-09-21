@@ -1358,7 +1358,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
       <input class="inp" id="sInput" placeholder="搜索联系人或消息…">
     </div>
     <div class="list" id="cList"></div>
-    <div class="foot"><span id="onInfo">在线 0 人</span><span id="conn" style="color:var(--brand)">已连接</span></div>
+    <div class="foot"><span id="onInfo">在线 0 人</span><span id="conn" style="color:var(--brand)">已连接</span><span id="verInfo" title="" style="color:var(--tx3);font-size:11px"></span></div>
   </aside>
 
   <main class="chat">
@@ -1413,6 +1413,8 @@ var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, f
 var FILE_MODE = location.protocol === 'file:';
 var BASE = FILE_MODE ? 'http://127.0.0.1:3000' : '';
 var WSBASE = FILE_MODE ? 'ws://127.0.0.1:3000' : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+var BUILD = { sha: 'f4c9660', date: '2026-09-21', subject: 'fix(layout): .msgs 补 min-height:0 防消息区撑开布局；头像点击改为光标处插入 @ 并修正提示文案' }; // LT_BUILD
+function verTag() { return BUILD.sha + ' · ' + BUILD.date; }
 
 var S = {
   token: localStorage.getItem('lantalk_token') || '',
@@ -1701,6 +1703,14 @@ function updateOnline() {
   var n = 0;
   Object.keys(S.online).forEach(function (id) { if (id !== BOT_ID) n++; });
   $('#onInfo').textContent = '在线 ' + n + ' 人';
+}
+// 页脚版本号（以 git 提交为版本标识）
+function renderVersion() {
+  var ve = $('#verInfo');
+  if (ve) {
+    ve.textContent = BUILD.sha + ' · ' + BUILD.date;
+    ve.title = '版本 ' + verTag() + (BUILD.subject ? '\\n' + BUILD.subject : '');
+  }
 }
 // 未读强提醒：标题红闪 + 图标红点 + 侧栏脉动 + 窗口描边
 var TITLE_BASE = "Let's Talk";
@@ -2574,6 +2584,7 @@ function confirmBox(text, onOk) {
 applyTheme();
 renderJoin();
 updatePrev();
+renderVersion();
 if (FILE_MODE) {
   $('#jTip').innerHTML = '当前以本地文件方式打开。若无法连接，请先在本文件所在目录执行 <b>node LanTalk.html</b> 启动服务，再刷新本页。';
 } else {

@@ -8,6 +8,7 @@
     "lan:test": "cd LanTalk && node test/smoke.js",
     "lan:ui": "cd LanTalk && node test/ui-check.js",
     "cloud:test": "node cloud/test-load.js",
+    "stamp": "node scripts/stamp-version.mjs",
     "test": "npm run lan:test && npm run cloud:test"
   },
   "devDependencies": {

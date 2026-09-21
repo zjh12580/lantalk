@@ -477,6 +477,16 @@ function makeStub() {
   log(D.querySelector('#bSet') !== null, '左下角新增「设置」入口按钮');
   log(D.querySelector('#sRow') !== null && !D.querySelector('#sRow').classList.contains('hidden'), '搜索框常显（不再需要搜索按钮）');
 
+  // ===== 设置面板：版本号（以 git 提交为版本标识）=====
+  D.querySelector('#bSet').click();
+  await sleep(150);
+  const verRow = D.querySelector('#sVer');
+  const verTxt = verRow ? verRow.textContent.replace(/\s+/g, ' ').trim() : '';
+  log(!!verRow, '设置面板含「版本」行');
+  log(/[0-9a-f]{7}\s*·\s*\d{4}-\d{2}-\d{2}/.test(verTxt), '版本号以 git 提交号 + 日期呈现', verTxt);
+  D.querySelector('#bSet').click();   // 收起设置面板
+  await sleep(100);
+
   // ===== 本轮修复：小美 24 小时在线 =====
   // 在大厅成员列表点小美头像，打开与她的私聊，头部应显示「在线」
   const xiaomeiMem = D.querySelector('#info .mem[data-u="bot_xiaomei"]');
