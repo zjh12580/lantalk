@@ -1613,6 +1613,9 @@ function renderMsgs(scroll) {
       m.sender_avatar = m.sender_avatar || (pf && pf.avatar) || '';
       m.sender_color = m.sender_color || (pf && pf.color) || '#8a8f99';
     }
+    // 头像以实时资料为准：旧消息里烘焙的头像可能过期（如小美形象升级）
+    var pfl = S.profiles[m.sender_id];
+    if (pfl && pfl.avatar) m.sender_avatar = pfl.avatar;
     var day = fmtDay(m.created_at);
     if (day !== lastDay) { html += '<div class="day"><span>' + day + '</span></div>'; lastDay = day; }
     if (m.type === 'system') { html += '<div class="sys"><span>' + esc(m.text) + '</span></div>'; return; }

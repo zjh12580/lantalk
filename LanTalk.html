@@ -987,6 +987,9 @@ function ensureBot() {
     db.users.push({ id: BOT, name: '小美', avatar: BOT_AVATAR, color: '#e0518f', signature: '气氛组组长 · @我我就说话 \uD83C\uDF38', ip: '', bot: true, createdAt: now(), lastSeen: 0 });
   } else if (botUser.avatar !== BOT_AVATAR) {
     botUser.avatar = BOT_AVATAR;   // 形象升级后同步旧数据
+    Object.keys(db.messages).forEach((c) => db.messages[c].forEach((m) => {
+      if (m.from === BOT && m.fromAvatar !== BOT_AVATAR) m.fromAvatar = BOT_AVATAR;
+    }));
   }
   const hall = db.groups.filter((g) => g.id === 'hall')[0];
   if (hall && hall.members.indexOf(BOT) < 0) hall.members.push(BOT);
