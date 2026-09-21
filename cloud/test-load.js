@@ -1621,6 +1621,14 @@ function makeStub() {
         '棋盘自身不写死尺寸（由 CSS width:min() 控制）');
       log(!!main && main.style.getPropertyValue('--bh') === '',
         'jsdom 无布局时不再写入 --bh（不会残留坏值）', main ? JSON.stringify(main.style.getPropertyValue('--bh')) : 'no main');
+
+      // 选中玩家条不能有背景填充（border + inset 描边会在圆角内侧叠出深色块，用户反馈多次）
+      const cssTxt = Array.prototype.map.call(D.querySelectorAll('style'), (s) => s.textContent).join('\n');
+      const onRule = (cssTxt.match(/\.groom \.gr-pl\.on\{[^}]*\}/) || [''])[0];
+      log(!!onRule && !/background|color-mix/.test(onRule),
+        '选中玩家条只改边框/文字色，无背景填充', onRule || '(未找到规则)');
+      log(!!onRule && !/box-shadow/.test(onRule),
+        '选中玩家条不再叠第二层描边（避免圆角内侧深色块）', onRule ? 'ok' : '(未找到规则)');
     }
   }
 
