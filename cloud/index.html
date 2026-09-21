@@ -923,17 +923,34 @@ function botTyping(conv) {
 }
 // @小美 → 她接话（技能可能要联网，异步完成后统一走 botSay）
 // ---- 小美 × DeepSeek：云端 Keyless LLM 网关（同源 /.cloud/llm，免 CORS，密钥云端配）----
-var LLM_TIMEOUT = 25000;
-// 懒加载并选定模型：优先 DeepSeek，否则用第一个可用的；未配置则 S.llmModel 保持 null
+// ⚠️ 前端不存任何 apikey：密钥由云端网关托管，这里只选「用哪个模型」。
+// 云上 DeepSeek 均为「纯推理模型（onlyReasoning）」且 effort=high，要先跑思考链再出正文，
+// 首字延迟明显高于普通对话模型 → 超时给到 45s（25s 容易被 abort 成「卡了一下」）
+var LLM_TIMEOUT = 45000;
+// 首选型号（按优先级）。deepseek-v4.1-flash：1M 上下文 / 原生多模态 / 积分最低
+// 想临时换型号调试：地址后加 ?llm=deepseek-v4-pro 即可，无需改代码
+var LLM_PREFERRED = ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v3-2-volc'];
+// 懒加载并选定模型：按优先级精确匹配 → 任意 deepseek → 任意可用；都没有则 S.llmModel 保持 null
 async function ensureLLM() {
   if (S.llmTried) return; S.llmTried = true;
   try {
     var models = await CLOUD.llm.models.list();
-    if (models && models.length) {
-      var ds = models.find(function (m) { return m.disabled !== true && /deepseek/i.test((m.id || '') + ' ' + (m.name || '')); });
-      var pick = ds || models.find(function (m) { return m.disabled !== true; });
-      S.llmModel = pick ? pick.id : null;
+    if (!models || !models.length) return;
+    var ok = function (m) { return m && m.disabled !== true && m.enabled !== false; };
+    var avail = models.filter(ok);
+    if (!avail.length) return;
+    // 1) URL 参数覆盖（调试用）
+    var want = null;
+    try { want = new URLSearchParams(location.search).get('llm'); } catch (e) {}
+    if (want) { var hit = avail.find(function (m) { return m.id === want; }); if (hit) { S.llmModel = hit.id; return; } }
+    // 2) 按优先级精确匹配（不靠列表顺序碰运气）
+    for (var i = 0; i < LLM_PREFERRED.length; i++) {
+      var p = avail.find(function (m) { return m.id === LLM_PREFERRED[i]; });
+      if (p) { S.llmModel = p.id; return; }
     }
+    // 3) 兜底：任意 deepseek → 任意可用
+    var ds = avail.find(function (m) { return /deepseek/i.test((m.id || '') + ' ' + (m.name || '')); });
+    S.llmModel = (ds || avail[0]).id;
   } catch (e) { S.llmModel = null; }
 }
 // 调 DeepSeek 生成回复（收集流式输出，复用会话最近若干条历史做上下文）
@@ -947,11 +964,14 @@ async function botLLM(text, who, conv) {
     .slice(-6).map(function (m) { return { role: m.sender_id === BOT.id ? 'assistant' : 'user', content: String(m.text) }; });
   var messages = [{ role: 'system', content: sys }].concat(hist, [{ role: 'user', content: text }]);
   var content = '', ctrl = new AbortController(), to = setTimeout(function () { ctrl.abort(); }, LLM_TIMEOUT);
+  // 请求体：只传必要字段。云上 DeepSeek 全是「纯推理模型（onlyReasoning）」，
+  // 采样参数由模型锁定，强行传 temperature 可能被拒 → 不传，用模型默认值。
+  var req = { model: S.llmModel, messages: messages, stream: true, signal: ctrl.signal };
+  if (S.llmTemp != null) req.temperature = S.llmTemp;
   try {
-    for await (var chunk of CLOUD.llm.chat.completions.create({
-      model: S.llmModel, messages: messages, stream: true, temperature: 0.8, signal: ctrl.signal,
-    })) {
+    for await (var chunk of CLOUD.llm.chat.completions.create(req)) {
       var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+      // 推理模型会先吐 reasoning_content（思考链），这里只收集正式回复，避免把思考过程发进聊天室
       if (d && d.content) content += d.content;
     }
   } finally { clearTimeout(to); }
@@ -2393,6 +2413,9 @@ window.LT = {
   renderRoom: function () { return renderRoom(); },
   openRoom: function (id) { return openRoom(id); },
   get GAME_KINDS() { return GAME_KINDS; },
+  // 供测试断言 Keyless LLM 网关的模型选择逻辑
+  ensureLLM: function () { return ensureLLM(); },
+  get LLM_PREFERRED() { return LLM_PREFERRED; },
 };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
 function promptBox(title, val, ta, onOk) {

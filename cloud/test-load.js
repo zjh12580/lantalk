@@ -112,6 +112,19 @@ let __updateFail = false;      // 置 true 时模拟网关「落盘成功但响�
 let __existsCalls = 0;
 let __puts = [];               // 手动 PUT 兜底的调用记录
 let __weatherOk = true;        // open-meteo 天气源是否可用
+// Keyless LLM 网关桩状态：默认给出与云上一致的目录（含 4 个 deepseek 候选）
+let __llmListCalls = 0;
+let __llmListFail = false;
+let __llmChatFail = false;
+let __llmModels = [
+  { id: 'auto', name: 'Auto', enabled: true },
+  { id: 'hy3', name: 'Hy3', enabled: true },
+  { id: 'deepseek-v4-flash', name: 'Deepseek-V4-Flash', enabled: true },
+  { id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash', enabled: true },
+  { id: 'deepseek-v4-pro', name: 'Deepseek-V4-Pro', enabled: true },
+  { id: 'deepseek-v3-2-volc', name: 'DeepSeek-V3.2', enabled: true },
+  { id: 'glm-5.3', name: 'GLM-5.3', enabled: true },
+];
 function makeStub() {
   return {
     createWorkBuddyCloud(opts) {
@@ -124,6 +137,26 @@ function makeStub() {
           signOut: () => Promise.resolve({ data: null, error: null }),
         },
         database: { from: (t) => TABLE[t]() },
+        // Keyless LLM 网关桩：模拟云上真实模型目录顺序（deepseek-v4-flash 排在 v4.1-flash 前面，
+        // 用来验证我们没有靠「列表第一个」碰运气，而是按优先级精确命中）
+        llm: {
+          models: {
+            list: () => {
+              __llmListCalls += 1;
+              if (__llmListFail) return Promise.reject(new Error('LLM gateway unavailable'));
+              return Promise.resolve([].concat(__llmModels));
+            },
+          },
+          chat: {
+            completions: {
+              create: () => (async function* () {
+                if (__llmChatFail) throw new Error('chat failed');
+                yield { choices: [{ delta: { content: '我是小美，' } }] };
+                yield { choices: [{ delta: { content: '很高兴认识你！' } }] };
+              })(),
+            },
+          },
+        },
         storage: {
           sharedPath: (uid, p) => 'shared/' + uid + '/' + p,
           upload: () => Promise.resolve({ data: { path: 'shared/u_test/x' }, error: null }),
@@ -579,6 +612,84 @@ function makeStub() {
     log(D.querySelector('#info').textContent.indexOf('好友') >= 0 && !D.querySelector('#afBtn'),
       '成为好友后资料页显示「好友」且不再出现添加按钮',
       (D.querySelector('#info').textContent || '').replace(/\s+/g, ' ').slice(0, 70));
+  }
+
+  // ===== 小美大模型能力：云端 Keyless LLM 网关（无需前端 apikey）=====
+  {
+    const LT = w.LT;
+
+    // 1) 接入方式：Keyless 网关 —— 前端源码里不得出现任何硬编码密钥
+    {
+      const src = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+      log(!/sk-[A-Za-z0-9]{16,}/.test(src), '前端源码无 sk- 硬编码密钥（apikey 由云端网关托管）');
+      log(/CLOUD\.llm\.chat\.completions\.create/.test(src), '通过 CLOUD.llm 网关调用（非直连第三方域名）');
+      log(!/api\.deepseek\.com/.test(src), '不直连 api.deepseek.com（避免密钥泄露 + CORS）');
+      // 云上 DeepSeek 全是 onlyReasoning 推理模型：不能硬传 temperature，超时也要放宽
+      log(!/stream:\s*true,\s*temperature:/.test(src), '不硬传 temperature（推理模型采样参数锁定，传了可能被拒）');
+      const to = src.match(/var LLM_TIMEOUT = (\d+)/);
+      log(!!to && Number(to[1]) >= 40000, 'LLM_TIMEOUT ≥ 40s（适配推理模型首字延迟）', to ? to[1] + 's' : 'none');
+      // 注意：源码里有两处 botTypingUntil（普通回复 1.5s / AI 长等待 60s），
+      // 要取「AI 长等待」那个最大值，否则会误配到 1.5s
+      const holds = Array.from(src.matchAll(/S\.botTypingUntil = Date\.now\(\) \+ (\d+)/g)).map((m) => Number(m[1]));
+      const hold = holds.length ? Math.max.apply(null, holds) : 0;
+      // 两者都是毫秒（LLM_TIMEOUT 直接喂给 setTimeout，单位就是 ms）
+      log(!!to && hold > 0 && Number(to[1]) < hold,
+        '「输入中」保持时长 > LLM 超时（不会中途掉指示器）',
+        to ? (Number(to[1]) / 1000) + 's vs ' + (hold / 1000) + 's' : 'none');
+    }
+
+    // 2) 模型选择：目录里 deepseek-v4-flash 排在 v4.1-flash 之前，
+    //    但必须精确命中优先级最高的 deepseek-v4.1-flash（不是列表第一个）
+    await sleep(300);
+    if (LT && LT.ensureLLM) {
+      LT.S.llmTried = false; LT.S.llmModel = null;
+      __llmListCalls = 0;
+      await LT.ensureLLM();
+      log(LT.S.llmModel === 'deepseek-v4.1-flash',
+        '模型选择按优先级精确命中 deepseek-v4.1-flash（不靠列表顺序）', String(LT.S.llmModel));
+      log(__llmListCalls === 1, '拉取模型目录 1 次', __llmListCalls);
+      // 幂等：再调一次不应重复拉目录
+      await LT.ensureLLM();
+      log(__llmListCalls === 1, 'ensureLLM 幂等（llmTried 生效，不重复拉目录）', __llmListCalls);
+    } else {
+      log(false, 'window.LT.ensureLLM 已导出', LT ? Object.keys(LT).join(',') : 'no LT');
+    }
+
+    // 3) 首选型号被禁用 → 跳到下一个可用
+    {
+      const saved = __llmModels.slice();
+      __llmModels = saved.map((m) => (m.id === 'deepseek-v4.1-flash' ? { id: m.id, name: m.name, disabled: true } : m));
+      if (LT && LT.ensureLLM) {
+        LT.S.llmTried = false; LT.S.llmModel = null;
+        await LT.ensureLLM();
+        log(LT.S.llmModel === 'deepseek-v4-flash', '首选被 disabled → 跳到次选', String(LT.S.llmModel));
+      }
+      __llmModels = saved;
+    }
+
+    // 4) 目录里没有 deepseek → 兜底任意可用
+    {
+      const saved = __llmModels.slice();
+      __llmModels = [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: true }];
+      if (LT && LT.ensureLLM) {
+        LT.S.llmTried = false; LT.S.llmModel = null;
+        await LT.ensureLLM();
+        log(LT.S.llmModel === 'glm-5.3', '目录无 deepseek → 兜底任意可用模型', String(LT.S.llmModel));
+      }
+      __llmModels = saved;
+    }
+
+    // 5) 网关不可用 → llmModel 为 null（静默降级，不报错）
+    {
+      const saved = __llmModels.slice();
+      __llmModels = [];
+      if (LT && LT.ensureLLM) {
+        LT.S.llmTried = false; LT.S.llmModel = null;
+        await LT.ensureLLM();
+        log(LT.S.llmModel === null, '模型目录为空 → llmModel 保持 null（走旧兜底话术）', String(LT.S.llmModel));
+      }
+      __llmModels = saved;
+    }
   }
 
   // ===== 本轮新功能：一起玩游戏（五子棋全链路）=====
