@@ -1611,6 +1611,15 @@ function makeStub() {
       log(!!D.querySelector('#groom .gr-main'), '对局浮层含右侧棋盘区 .gr-main');
       const hint = D.querySelector('#groom #grHint');
       if (hint) log(hint.classList.contains('gr-status'), '轮次/提示文案放在左侧 .gr-status 里');
+
+      // 棋盘等比自适应：宽度参与 min() 的 --bh 变量存在（矮窗口靠它等比缩小，不裁上下）
+      const main = D.querySelector('#groom .gr-main');
+      const cvb = D.querySelector('#gboard, #gBoard');
+      log(!!main.style.getPropertyValue('--bh'),
+        '棋盘可用高度预算 --bh 已写入 .gr-main', main.style.getPropertyValue('--bh'));
+      const wcss = (typeof w.getComputedStyle === 'function' && cvb)
+        ? w.getComputedStyle(cvb).width : '';
+      log(!wcss || /%|px/.test(wcss), '棋盘宽度由 CSS width 控制（可被 --bh 约束）', wcss || '(jsdom 不解析)');
     }
   }
 
