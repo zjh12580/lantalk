@@ -1532,6 +1532,15 @@ function makeStub() {
     await sleep(60);
     const secondOn = mpop.querySelectorAll('.mitem.on')[0];
     log(!!firstOn && !!secondOn && firstOn !== secondOn, '↓ 键切换成员高亮');
+    log(mpop.querySelectorAll('.mitem.on').length === 1, '任意时刻只有一个成员处于预选高亮');
+
+    // 弹层靠左对齐输入框（不居中）
+    {
+      const pr = D.querySelector('#pPill').getBoundingClientRect();
+      const mr = mpop.getBoundingClientRect();
+      log(Math.abs(mr.left - pr.left) <= 3, '@ 成员列表左边缘对齐输入框（靠左显示）',
+        'popLeft=' + Math.round(mr.left) + ' pillLeft=' + Math.round(pr.left));
+    }
 
     // Enter = 确认艾特（关键：绝不能发送消息）
     const targetName = secondOn.querySelector('span').textContent.trim();
