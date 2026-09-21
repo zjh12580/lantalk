@@ -197,15 +197,27 @@ function makeStub() {
 
   // 1. 未设昵称 -> 停在昵称页
   log(!D.querySelector('#join').classList.contains('hidden'), '已登录但未设昵称：显示昵称设置页');
-  log(D.querySelectorAll('#jEmo span').length > 100, '表情头像候选已扩容到 100+', D.querySelectorAll('#jEmo span').length);
-  log(D.querySelectorAll('#jEmo .emo-sec').length >= 4, '表情按分组展示（表情/手势/动物/食物/符号）', D.querySelectorAll('#jEmo .emo-sec').length);
+  log(D.querySelectorAll('#jEmo span[data-e]').length > 100, '表情头像候选已扩容到 100+', D.querySelectorAll('#jEmo span[data-e]').length);
+  log(D.querySelectorAll('#jEmo .emo-pg').length >= 4, '表情按组分页（表情/手势/动物/食物/符号）', D.querySelectorAll('#jEmo .emo-pg').length);
+  // 分页行为：默认只显示第一组，其余隐藏
+  const pgVisible = () => Array.prototype.slice.call(D.querySelectorAll('#jEmo .emo-pg')).filter((p) => p.style.display !== 'none').length;
+  log(pgVisible() === 1, '默认只显示 1 组（不再整列长滚动）', pgVisible());
+  const visibleGroup = D.querySelector('#jEmo .emo-pager').getAttribute('data-cur');
+  D.querySelector('#jEmo .ep-nav[data-p="1"]').click();
+  await sleep(30);
+  log(D.querySelector('#jEmo .emo-pager').getAttribute('data-cur') !== visibleGroup, '点击「下一组」可左右翻页', D.querySelector('#jEmo .emo-pager').getAttribute('data-cur'));
+  log(pgVisible() === 1, '翻页后仍只显示 1 组', pgVisible());
+  log(D.querySelectorAll('#jEmo .ep-dots i').length >= 4, '提供页码点指示器', D.querySelectorAll('#jEmo .ep-dots i').length);
+  D.querySelector('#jEmo .ep-dots i').click();
+  await sleep(30);
+  log(D.querySelector('#jEmo .emo-pager').getAttribute('data-cur') === '0', '点击页码点跳回第一组', D.querySelector('#jEmo .emo-pager').getAttribute('data-cur'));
   log(D.querySelectorAll('#jColor i').length >= 15, '昵称页提供 15+ 款头像背景色', D.querySelectorAll('#jColor i').length);
 
   // 2. 设置昵称进入
   D.querySelector('#jName').value = '云端测试';
   D.querySelector('#jName').dispatchEvent(new w.Event('input', { bubbles: true }));
-  const pickedEmoji = D.querySelectorAll('#jEmo span')[1].dataset.e;
-  D.querySelectorAll('#jEmo span')[1].click();
+  const pickedEmoji = D.querySelectorAll('#jEmo span[data-e]')[1].dataset.e;
+  D.querySelectorAll('#jEmo span[data-e]')[1].click();
   // 选一个非默认背景色，验证会被写入 profiles
   const pickedColor = D.querySelectorAll('#jColor i')[3].dataset.c;
   D.querySelectorAll('#jColor i')[3].click();
@@ -280,8 +292,20 @@ function makeStub() {
   bEmo.getBoundingClientRect = () => btnRect;
 
   bEmo.click();
-  log(!epop.classList.contains('hidden') && epop.querySelectorAll('span').length > 10, '点表情按钮弹出表情面板');
+  log(!epop.classList.contains('hidden') && epop.querySelectorAll('span[data-e]').length > 10, '点表情按钮弹出表情面板');
   log(!!D.querySelector('#epopClose'), '面板里有「关闭 ✕」按钮');
+  // 聊天表情面板：分页而非整列长滚动
+  log(epop.querySelectorAll('.emo-pg').length >= 4, '聊天表情面板按组分页', epop.querySelectorAll('.emo-pg').length);
+  const cVis = () => Array.prototype.slice.call(epop.querySelectorAll('.emo-pg')).filter((p) => p.style.display !== 'none').length;
+  log(cVis() === 1, '聊天表情面板默认只显示 1 组', cVis());
+  const cCur0 = epop.querySelector('.emo-pager').getAttribute('data-cur');
+  epop.querySelector('.ep-nav[data-p="1"]').click();
+  await sleep(20);
+  log(epop.querySelector('.emo-pager').getAttribute('data-cur') !== cCur0, '聊天表情面板可左右翻页', epop.querySelector('.emo-pager').getAttribute('data-cur'));
+  log(cVis() === 1, '聊天表情翻页后仍只显示 1 组', cVis());
+  epop.querySelector('.ep-dots i').click();
+  await sleep(20);
+  log(epop.querySelector('.emo-pager').getAttribute('data-cur') === '0', '聊天表情面板页码点可跳转回第一组');
 
   // 面板定位不能盖住触发按钮（否则按钮点不到就再也关不掉）
   const popTop = parseFloat(epop.style.top || '-1');
@@ -290,7 +314,7 @@ function makeStub() {
     '面板定位不遮挡表情按钮（面板 ' + popTop + '~' + popBottom + '，按钮 ' + btnRect.top + '~' + btnRect.bottom + '）');
 
   // 1) 选表情后自动关闭
-  epop.querySelector('span').click();
+  epop.querySelector('span[data-e]').click();
   log(epop.classList.contains('hidden'), '选中表情后面板自动关闭');
   log(D.querySelector('#input').value.indexOf('😀') >= 0, '表情已插入输入框', JSON.stringify(D.querySelector('#input').value));
   D.querySelector('#input').value = '';
@@ -475,6 +499,16 @@ function makeStub() {
   log(botMsgs.length >= 1 && botMsgs[0].sender_name === '小美' && botMsgs[0].conv === 'g:hall',
     '小美以「小美」的身份在大厅发言');
   log(D.querySelector('#mList').textContent.indexOf('小美') >= 0, '小美的消息渲染在聊天区');
+
+  // ===== 本轮修复：小美不 @ 就不主动发言 =====
+  {
+    const botCountBefore = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei').length;
+    // 主动冒泡已停用：多次触发空闲回调也不应产生新消息
+    for (let i = 0; i < 5; i++) { try { w.LT.botIdle(); } catch (e) { /* 未导出则忽略 */ } }
+    await sleep(400);
+    const botCountAfter = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei').length;
+    log(botCountAfter === botCountBefore, '小美不再主动冒泡（不 @ 不发言）', botCountBefore + ' -> ' + botCountAfter);
+  }
 
   // ===== 本轮修复：侧栏不再有分类 tab =====
   log(D.querySelector('.tabs') === null, '侧栏分类 tab（全部/未读/群聊/好友）已移除');

@@ -49,10 +49,22 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 .join-card h1{margin:0 0 4px;font-size:22px}
 .join-card .sub{margin:0 0 20px;font-size:13px;color:var(--tx3)}
 .join-prev{display:flex;align-items:center;gap:14px;margin-bottom:16px;padding:12px;background:var(--bg3);border-radius:12px}
-.emo-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;max-height:150px;overflow-y:auto;padding:6px;background:var(--bg3);border-radius:10px;margin-top:6px}
+.emo-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;padding:6px;background:var(--bg3);border-radius:10px;margin-top:6px}
 .emo-grid span{font-size:22px;text-align:center;cursor:pointer;padding:4px;border-radius:6px;line-height:1.2}
 .emo-grid span:hover{background:var(--hover)}
 .emo-grid span.on{background:var(--brand)}
+/* 分页表情选择器（左右翻页 + 页码点 + 关闭） */
+.emo-pg{background:var(--bg3);border-radius:10px;margin-top:6px;padding:6px}
+.emo-pg .ep-body{min-height:118px}
+.emo-pg .emo-grid{background:none;padding:0;margin:0}
+.emo-pg .ep-bar{display:flex;align-items:center;justify-content:center;gap:12px;height:26px}
+.emo-pg .ep-nav{cursor:pointer;font-size:14px;color:var(--tx2);padding:2px 9px;border-radius:6px;user-select:none;line-height:1.4}
+.emo-pg .ep-nav:hover{background:var(--hover);color:var(--brand)}
+.emo-pg .ep-nav.dis{opacity:.28;pointer-events:none}
+.emo-pg .ep-nav.sp{visibility:hidden}
+.emo-pg .ep-dots{display:flex;gap:5px;align-items:center}
+.emo-pg .ep-dots i{width:6px;height:6px;border-radius:50%;background:var(--tx3);opacity:.35;cursor:pointer;transition:.15s}
+.emo-pg .ep-dots i.on{opacity:1;background:var(--brand);width:16px;border-radius:3px}
 /* 头像颜色选择：十几个经典色，选中打勾 */
 .color-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:7px;padding:8px;background:var(--bg3);border-radius:10px;margin-top:6px}
 .color-grid i{height:26px;border-radius:8px;cursor:pointer;position:relative;transition:transform .1s ease}
@@ -290,10 +302,12 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .mpop{width:190px;max-height:220px;overflow-y:auto}
 .mitem{padding:7px 12px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px}
 .mitem:hover{background:var(--hover)}
-.epop{width:320px;padding:8px;display:grid;grid-template-columns:repeat(8,1fr)}
-.epop span{font-size:20px;text-align:center;cursor:pointer;padding:4px;border-radius:6px}
-.epop span:hover{background:var(--hover)}
-.epop .epopclose{grid-column:1/-1;text-align:center;font-size:12px;color:var(--tx2);padding:6px 0 2px;margin-top:4px;border-top:1px solid var(--bd);cursor:pointer}
+.epop{width:308px;padding:8px}
+.epop .emo-pg{margin-top:0}
+.epop .emo-grid{grid-template-columns:repeat(8,1fr)}
+.epop .emo-grid span{font-size:21px;text-align:center;cursor:pointer;padding:5px;border-radius:6px}
+.epop .emo-grid span:hover{background:var(--hover)}
+.epop .epopclose{text-align:center;font-size:12px;color:var(--tx2);padding:8px 0 2px;margin-top:8px;border-top:1px solid var(--bd);cursor:pointer}
 .epop .epopclose:hover{color:var(--brand)}
 .toasts{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:8px;align-items:center}
 .toast{background:var(--bg3);border:1px solid var(--bd);box-shadow:var(--sd);padding:9px 16px;border-radius:20px;font-size:13px;max-width:70vw;cursor:pointer}
@@ -911,8 +925,11 @@ function maybeBotReply(m) {
     if (!replied) botReply(m.conv, m.text, who);
   }, 6000);
 }
-// 不定时主动冒泡：大厅/群里冷场或正热闹时都可能冒一句
-function botIdle() {
+// 小美主动冒泡已关闭：不 @ 她就不发言（私聊小美仍会自动回复）
+function botIdle() { return; }
+
+// 历史版本保留参考（若需恢复主动冒泡，把下面逻辑接回 botIdle 即可）
+function botIdleLegacy() {
   if (!S.uid || !S.convs || !S.convs.length) return;
   var now = Date.now();
   var last = S.lastBotSaid;
@@ -1155,12 +1172,32 @@ function renderJoinEmo() {
   $('#jColor').innerHTML = colorPickerHtml();
   bindColorPicker($('#jColor'), function (c) { S.pickColor = c; updatePrev(); }, function () { return S.pickColor; });
 }
-// 分组表情选择器（返回 HTML 片段）
-function emojiPickerHtml() {
-  return EMOJI_GROUPS.map(function (g) {
-    return '<div class="emo-sec">' + esc(g.name) + '</div>'
-      + '<div class="emo-grid g-sm">' + g.list.map(function (e) { return '<span data-e="' + esc(e) + '">' + e + '</span>'; }).join('') + '</div>';
+// 分页表情选择器（每组一页，左右箭头翻页，页码点跳转，底部关闭）
+var EMO_PG_SIZE = 41;
+function emojiPickerHtml(opts) {
+  opts = opts || {};
+  var withClose = !!opts.close;
+  var inner = EMOJI_GROUPS.map(function (g, gi) {
+    return '<div class="emo-pg" data-g="' + gi + '">'
+      + '<div class="ep-body"><div class="emo-grid g-sm">'
+      + g.list.map(function (e) { return '<span data-e="' + esc(e) + '">' + e + '</span>'; }).join('')
+      + '</div></div>'
+      + '<div class="ep-bar">'
+      + '<span class="ep-nav sp">‹</span>'
+      + '<span class="ep-nav ep-prev" data-p="' + ((gi - 1 + EMOJI_GROUPS.length) % EMOJI_GROUPS.length) + '">‹ 上一组</span>'
+      + '<span class="ep-dots">' + EMOJI_GROUPS.map(function (x, j) { return '<i data-p="' + j + '" class="' + (j === gi ? 'on' : '') + '"></i>'; }).join('') + '</span>'
+      + '<span class="ep-nav ep-next" data-p="' + ((gi + 1) % EMOJI_GROUPS.length) + '">下一组 ›</span>'
+      + '</div></div>';
   }).join('');
+  return '<div class="emo-pager">' + inner + '</div>'
+    + (withClose ? '<div class="epopclose" id="epopClose">关闭 ✕</div>' : '');
+}
+function showPg(root, idx) {
+  var wrap = root.querySelector('.emo-pager'); if (!wrap) return;
+  var n = EMOJI_GROUPS.length; if (!n) return;
+  idx = ((idx % n) + n) % n;
+  wrap.setAttribute('data-cur', String(idx));
+  $qa(wrap, '.emo-pg').forEach(function (p) { p.style.display = (Number(p.dataset.g) === idx) ? '' : 'none'; });
 }
 function bindEmojiPicker(root, onPick, getVal, after) {
   if (!root) return;
@@ -1171,6 +1208,15 @@ function bindEmojiPicker(root, onPick, getVal, after) {
       if (after) after();
     };
   });
+  $qa(root, '.ep-nav[data-p]').forEach(function (b) {
+    b.onclick = function (ev) { ev.stopPropagation(); showPg(root, Number(b.dataset.p)); };
+  });
+  $qa(root, '.ep-dots i[data-p]').forEach(function (d) {
+    d.onclick = function (ev) { ev.stopPropagation(); showPg(root, Number(d.dataset.p)); };
+  });
+  var wrap = root.querySelector('.emo-pager');
+  var cur = wrap ? Number(wrap.getAttribute('data-cur') || 0) : 0;
+  showPg(root, cur);
   syncEmojiPicker(root, getVal());
 }
 function syncEmojiPicker(root, val) {
@@ -1500,8 +1546,8 @@ function startLoops() {
   if (S.loop) return;
   S.loop = setInterval(tick, 2500);
   S.beat = setInterval(heartbeat, 30000);
-  if (!S.botLoop) S.botLoop = setInterval(botIdle, 60000);   // 小美不定时冒泡
-  setTimeout(botIdle, 25000);                                 // 进来 25 秒后有概率先冒一句
+  if (!S.botLoop) S.botLoop = setInterval(botIdle, 60000);   // 小美不定时冒泡（已停用：不 @ 不发言）
+  // setTimeout(botIdle, 25000);                              // 进入后主动冒泡（已停用）
 }
 function heartbeat() {
   db.from('profiles').update({ last_seen: new Date().toISOString() }).eq('id', S.uid).then(function () {}).catch(function () {});
@@ -2583,13 +2629,13 @@ $('#bEmo').onclick = function () {
   var pop = $('#epop');
   if (!pop.classList.contains('hidden')) { closePops(); return; }
   closePops();
-  pop.innerHTML = EMOJIS.map(function (e) { return '<span data-e="' + e + '">' + e + '</span>'; }).join('')
-    + '<div class="epopclose" id="epopClose">关闭 ✕</div>';
+  pop.innerHTML = emojiPickerHtml({ close: true });
   pop.classList.remove('hidden');
-  placePop(pop, $('#bEmo'));
-  $$('#epop span').forEach(function (s) {
+  bindEmojiPicker(pop, function (e) { $('#input').value += e; }, function () { return ''; }, null);
+  $qa(pop, 'span[data-e]').forEach(function (s) {
     s.onclick = function () { $('#input').value += s.dataset.e; closePops(); $('#input').focus(); };
   });
+  placePop(pop, $('#bEmo'));
   $('#epopClose').onclick = function () { closePops(); $('#input').focus(); };
 };
 // 点击空白处关闭浮层；按 Esc 关闭浮层和弹窗
