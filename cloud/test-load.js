@@ -1612,14 +1612,15 @@ function makeStub() {
       const hint = D.querySelector('#groom #grHint');
       if (hint) log(hint.classList.contains('gr-status'), '轮次/提示文案放在左侧 .gr-status 里');
 
-      // 棋盘等比自适应：宽度参与 min() 的 --bh 变量存在（矮窗口靠它等比缩小，不裁上下）
+      // 棋盘等比自适应：jsdom 不做布局（clientHeight 恒为 0），无法断言真实像素，
+      // 这里只验证「宽度确实参与 --bh 约束」这一 CSS 契约 + fitBoard 在无布局时不误写坏值。
       const main = D.querySelector('#groom .gr-main');
       const cvb = D.querySelector('#gboard, #gBoard');
-      log(!!main.style.getPropertyValue('--bh'),
-        '棋盘可用高度预算 --bh 已写入 .gr-main', main.style.getPropertyValue('--bh'));
-      const wcss = (typeof w.getComputedStyle === 'function' && cvb)
-        ? w.getComputedStyle(cvb).width : '';
-      log(!wcss || /%|px/.test(wcss), '棋盘宽度由 CSS width 控制（可被 --bh 约束）', wcss || '(jsdom 不解析)');
+      log(!!cvb && typeof w.LT.fitBoard === 'function', '导出 fitBoard 供棋盘自适应调用');
+      log(!!cvb && /--bh/.test(cvb.getAttribute('style') || '') === false,
+        '棋盘自身不写死尺寸（由 CSS width:min() 控制）');
+      log(!!main && main.style.getPropertyValue('--bh') === '',
+        'jsdom 无布局时不再写入 --bh（不会残留坏值）', main ? JSON.stringify(main.style.getPropertyValue('--bh')) : 'no main');
     }
   }
 
