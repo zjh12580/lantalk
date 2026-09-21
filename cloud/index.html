@@ -293,14 +293,18 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .gpick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
 .gcard{background:var(--bg3);border:1px solid var(--bd);border-radius:12px;padding:14px 8px;text-align:center;cursor:pointer;transition:.15s}
 .gcard:hover{border-color:var(--brand);transform:translateY(-2px)}
-.gcard .gico{font-size:30px;line-height:1.2}
+.gcard .gico{font-size:30px;line-height:1.2;display:flex;align-items:center;justify-content:center;height:34px;color:var(--tx)}
+.gcard .gico svg{width:32px;height:32px;display:block}
+.gcard:hover .gico{color:var(--brand)}
 .gcard .gnm{font-size:13px;margin-top:6px;font-weight:600}
 .gcard .gds{font-size:11px;color:var(--tx3);margin-top:2px}
 .gcard.off{opacity:.45;cursor:not-allowed}
 .gcard.off:hover{border-color:var(--bd);transform:none}
+.gcard.off:hover .gico{color:var(--tx)}
 /* 邀请卡片消息 */
 .ginvite{margin:6px 0;padding:12px 14px;border-radius:12px;background:var(--bg2);border:1px solid var(--bd);max-width:280px}
-.ginvite .git{font-size:14px;font-weight:600;margin-bottom:4px}
+.ginvite .git{font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.ginvite .git svg{width:17px;height:17px;display:block;flex-shrink:0}
 .ginvite .gsub{font-size:12px;color:var(--tx3);margin-bottom:10px;line-height:1.5}
 .ginvite .gbtn{display:block;width:100%;padding:8px;border-radius:9px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--brand);color:#fff;transition:.15s}
 .ginvite .gbtn:hover{filter:brightness(1.08)}
@@ -310,7 +314,8 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .groom{position:fixed;inset:0;background:var(--bg);z-index:120;display:flex;flex-direction:column}
 .groom .gr-top{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bd);flex-shrink:0}
 .groom .gr-title{font-size:15px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.groom .gr-tag{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--tx2);flex-shrink:0}
+.groom .gr-tag{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--tx2);flex-shrink:0;display:inline-flex;align-items:center;gap:5px}
+.groom .gr-tag svg{width:15px;height:15px;display:block}
 .groom .gr-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px;overflow:auto}
 .groom .gr-side{display:flex;align-items:center;gap:14px;margin-bottom:12px;font-size:13px;flex-wrap:wrap;justify-content:center}
 .groom .gr-pl{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:20px;background:var(--bg2);border:1px solid var(--bd)}
@@ -318,6 +323,14 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .groom .gr-pl .dot{width:7px;height:7px;border-radius:50%;background:var(--tx3)}
 .groom .gr-pl.on .dot{background:var(--brand);animation:livepulse 1.4s infinite}
 #gBoard{background:#e9be7c;border-radius:8px;box-shadow:var(--sd);touch-action:none;max-width:100%;height:auto}
+/* 等待对方加入：棋盘只读 + 遮罩 */
+.groom .gr-cvwrap{position:relative;display:inline-block;max-width:100%}
+.groom .gr-cvwrap canvas.gr-dim{opacity:.42;filter:saturate(.6)}
+.groom .gr-waitmask{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.34);border-radius:8px;backdrop-filter:blur(1.5px)}
+.groom .gr-waitmask .gr-hint{color:#fff;margin-top:10px;text-shadow:0 1px 3px rgba(0,0,0,.5)}
+.groom .gr-spin{width:30px;height:30px;border-radius:50%;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;animation:grspin .8s linear infinite}
+@keyframes grspin{to{transform:rotate(360deg)}}
 .groom .gr-foot{padding:12px 16px;border-top:1px solid var(--bd);display:flex;justify-content:center;gap:10px;flex-shrink:0}
 .groom .gr-hint{margin-top:12px;font-size:12.5px;color:var(--tx3);text-align:center;line-height:1.6}
 .gr-cnt{font-size:44px;font-weight:700;color:var(--brand);line-height:1.1}
@@ -2608,8 +2621,11 @@ function renderInfo() {
           // 立即刷新本地好友表与会话名，避免要等下一次轮询才生效
           var f2 = S.friends.filter(function (x) { return x.a === f.a && x.b === f.b; })[0];
           if (f2) { if (f2.a === S.uid) f2.remark_a = v; else f2.remark_b = v; }
-          c.name = displayName(c.id);
-          $('#cName').textContent = c.name;
+          // 重新推导会话名（不能只改 c.name：buildConvs 会按 displayName 重建，侧栏需同步）
+          buildConvs();
+          var c2 = cm()[c.conv];
+          if (c2) c2.name = displayName(c.id);
+          $('#cName').textContent = displayName(c.id);
           renderConvs();
           toast('已保存');
         }).catch(function (e) { toast('保存失败：' + (e.message || e), 'err'); });
@@ -2817,11 +2833,33 @@ document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' || e.key === 'Esc') { closePops(); closeModal(); closeViewer(); }
 });
 // ==================== 一起玩游戏 ====================
+// 棋种图标：内联 SVG（统一 24x24 线性风格，跟随 currentColor，比 emoji 清晰可控）
+var GAME_ICONS = {
+  // 五子棋：棋盘上手谈一颗子
+  gomoku: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<rect x="2.5" y="2.5" width="19" height="19" rx="3.5" stroke="currentColor" stroke-width="1.6"/>'
+    + '<path d="M7.8 2.5v19M12 2.5v19M16.2 2.5v19M2.5 7.8h19M2.5 12h19M2.5 16.2h19" stroke="currentColor" stroke-width="1.1" opacity=".45"/>'
+    + '<circle cx="12" cy="12" r="3.4" fill="currentColor"/>'
+    + '<circle cx="7.8" cy="16.2" r="2.3" fill="currentColor" opacity=".62"/></svg>',
+  // 围棋：带高光的黑白双子
+  go: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<circle cx="9" cy="13.6" r="6.4" stroke="currentColor" stroke-width="1.7"/>'
+    + '<circle cx="15.2" cy="9.6" r="5.6" fill="currentColor"/>'
+    + '<path d="M13.1 7.1c.5-.5 1.2-.8 1.9-.8" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity=".85"/>'
+    + '<circle cx="9" cy="13.6" r="1.5" fill="currentColor" opacity=".3"/></svg>',
+  // 象棋：楚河汉界棋盘 + 帅/将
+  xiangqi: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">'
+    + '<rect x="3.2" y="3.2" width="17.6" height="17.6" rx="2.4" stroke="currentColor" stroke-width="1.6"/>'
+    + '<path d="M3.2 9.5h17.6M3.2 14.5h17.6M9.1 3.2v17.6M14.9 3.2v17.6" stroke="currentColor" stroke-width="1" opacity=".4"/>'
+    + '<path d="M3.2 12h17.6" stroke="currentColor" stroke-width="1.6"/>'
+    + '<circle cx="12" cy="12" r="4.1" fill="var(--bg2,#1d2026)" stroke="currentColor" stroke-width="1.7"/>'
+    + '<text x="12" y="12.9" text-anchor="middle" font-size="5.4" font-weight="700" fill="currentColor" font-family="inherit">将</text></svg>',
+};
 // 棋种定义：五子棋（P1 完整可玩）；围棋/象棋待后续补规则引擎
 var GAME_KINDS = {
-  gomoku: { name: '五子棋', icon: '⚫', desc: '五子连线即胜', ready: true },
-  go: { name: '围棋', icon: '⚪', desc: '提子围地（开发中）', ready: false },
-  xiangqi: { name: '象棋', icon: '🩸', desc: '将死对方（开发中）', ready: false },
+  gomoku: { name: '五子棋', icon: GAME_ICONS.gomoku, desc: '五子连线即胜', ready: true },
+  go: { name: '围棋', icon: GAME_ICONS.go, desc: '提子围地（开发中）', ready: false },
+  xiangqi: { name: '象棋', icon: GAME_ICONS.xiangqi, desc: '将死对方（开发中）', ready: false },
 };
 var GAME_TTL = 10 * 60 * 1000;      // 邀请有效期 10 分钟
 var GAME_SWEEP = 6 * 60 * 60 * 1000; // 结束后 6 小时清掉记录
@@ -2842,7 +2880,7 @@ function gameInviteHtml(m, g, selfInv) {
   var kd = GAME_KINDS[kind] || GAME_KINDS.gomoku;
   var expired = g ? (Date.now() - new Date(g.created_at).getTime() > GAME_TTL) : true;
   var mine = g && g.hostId === S.uid;
-  var title = kd.icon + ' ' + kd.name + '邀请';
+  var title = kd.icon + '<span>' + esc(kd.name) + '邀请</span>';
   var sub, btn, dis;
   if (!g) {
     sub = '这场对局已经不存在了'; btn = '游戏已开始或已过期'; dis = true;
@@ -2854,6 +2892,9 @@ function gameInviteHtml(m, g, selfInv) {
   } else if (g.status === 'playing') {
     if (g.guestId === S.uid || g.hostId === S.uid) { sub = '对局进行中'; btn = '进入对局'; dis = false; }
     else { sub = '已被 ' + (g.guestName || '其他人') + ' 抢先加入'; btn = '游戏已开始或已过期'; dis = true; }
+  } else if (g.status === 'over' && !g.winner) {
+    // 还没开打就结束了（发起方提前离开 / 取消）→ 用「过期」语义
+    sub = '发起方已取消或邀请已过期'; btn = '游戏已开始或已过期'; dis = true;
   } else {
     sub = '本局已结束'; btn = '游戏已开始或已过期'; dis = true;
   }
@@ -2915,6 +2956,8 @@ function startGame(kind) {
     if (m) { pushMsg(S.cur, m); trackRecent(m); if (m.id > S.lastId) S.lastId = m.id; }
     S.games[id] = { id: id, conv: S.cur, kind: kind, hostId: S.uid, hostName: (S.me && S.me.nickname) || '', guestId: '', guestName: '', status: 'waiting', turn: 'host', board: [], moves: [], created_at: now };
     renderMsgs('bottom'); buildConvs(); renderConvs();
+    // 发起方立刻进入对局页等待（此时还不能落子）
+    openRoom(id);
     toast('已发起' + kd.name + '邀请，等对方加入～');
   }).catch(function (e) { S.gameBusy = false; toast('发起失败：' + (e.message || e), 'err'); });
 }
@@ -2967,7 +3010,9 @@ var GB = {
 // 落子
 function gamePlace(r, c) {
   var id = S.gameOpen; var g = gameOf(id);
-  if (!g || g.status !== 'playing' || S.gameBusy) return;
+  if (!g || S.gameBusy) return;
+  if (g.status === 'waiting') { toast('对方还未进入房间'); return; }
+  if (g.status !== 'playing') return;
   var meSide = g.hostId === S.uid ? 'host' : 'guest';
   if (g.turn !== meSide) { toast('还没轮到你落子', 'err'); return; }
   var board = (g.board || []).slice();
@@ -3062,8 +3107,17 @@ function renderRoom() {
         + '<div class="gr-hint" style="margin-top:16px">游戏房间清扫中~~~</div></div>';
     }
   } else if (g.status === 'waiting') {
-    body = '<div class="gr-body"><div class="gr-hint">等待对方加入…</div>'
-      + '<div class="gpick2"><button id="grCancel">取消邀请</button></div></div>';
+    // 发起方：直接展示棋盘（只读），并盖一层「等待对方进入」遮罩
+    body = '<div class="gr-body gr-waitwrap">'
+      + '<div class="gr-side">'
+      + '<div class="gr-pl on"><span class="dot"></span>' + esc(g.hostName || '发起方') + (mine ? '（我）' : '') + '</div>'
+      + '<div class="gr-pl"><span class="dot"></span>' + esc(mine ? '等待加入' : (g.hostName || '对方')) + (!mine ? '（我）' : '') + '</div>'
+      + '</div>'
+      + '<div class="gr-cvwrap">'
+      + '<canvas id="gBoard" width="450" height="450" class="gr-dim"></canvas>'
+      + '<div class="gr-waitmask"><div class="gr-spin"></div><div class="gr-hint" style="margin:10px 0 0">等待对方进入房间…</div></div>'
+      + '</div>'
+      + '<div class="gr-hint" id="grHint">对方加入后即可开始落子</div></div>';
   } else {
     body = '<div class="gr-body">'
       + '<div class="gr-side">'
@@ -3074,7 +3128,7 @@ function renderRoom() {
       + '<div class="gr-hint" id="grHint"></div></div>';
   }
   el.innerHTML = head + body;
-  if (g.status === 'playing') drawBoard(g);
+  if (g.status === 'playing' || g.status === 'waiting') drawBoard(g);
   bindRoom(g);
 }
 function bindRoomClose() {
@@ -3095,13 +3149,18 @@ function bindRoom(g) {
   var cv = $('#gBoard');
   if (cv) {
     cv.onclick = function (ev) {
+      if (g.status === 'waiting') { toast('对方还未进入房间'); return; }
       var rc = boardCell(cv, ev);
       if (rc) gamePlace(rc.r, rc.c);
     };
     var hint = $('#grHint');
     if (hint) {
-      var meSide = g.hostId === S.uid ? 'host' : 'guest';
-      hint.textContent = g.turn === meSide ? '轮到你落子' : '对方思考中…';
+      if (g.status === 'waiting') {
+        hint.textContent = '对方加入后即可开始落子';
+      } else {
+        var meSide = g.hostId === S.uid ? 'host' : 'guest';
+        hint.textContent = g.turn === meSide ? '轮到你落子' : '对方思考中…';
+      }
     }
   }
 }
@@ -3174,9 +3233,11 @@ function leaveGame() {
   closeRoom();
   if (!g) return;
   var mine = g.hostId === S.uid;
-  if (g.status === 'waiting' && mine) {
-    // 发起方在等待阶段取消 → 删掉记录
-    q(db.from('games').delete().eq('id', id)).then(function () { refreshGames(); }).catch(function () {});
+  if (g.status === 'waiting') {
+    // 等待阶段退出（发起方取消 / 另一方离开）→ 本局直接作废，
+    // 标记 over 而不是删除：让聊天里的邀请卡片保留并置灰「游戏已开始或已过期」
+    q(db.from('games').update({ status: 'over', winner: '', ended_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', id))
+      .then(function () { refreshGames(); }).catch(function () {});
     return;
   }
   if (g.status === 'playing') {
@@ -3197,18 +3258,21 @@ function applyGames(rows) {
   var prevSig = S.gameSig || '';
   S.games = now;
   var sig = sigOf(now);
+  var changed = sig !== prevSig;
   S.gameSig = sig;
-  // 我正开着房间 → 状态变了就重渲染
+  // 我正开着房间 → 重渲染房间浮层
   if (S.gameOpen) {
     var cur = now[S.gameOpen];
-    if (!cur) { closeRoom(); toast('对局已结束'); return; }
-    renderRoom();
-    // 对手离开 → 启动 3 秒倒计时
-    if (cur.status === 'left' && !S.gameLeaveT) startLeaveCountdown();
-  } else if (sig !== prevSig) {
-    // 没开房间但邀请卡片状态变了（对方加入 / 已结束 / 邀请过期）→ 同步聊天区卡片
-    if (S.cur) renderMsgs();
+    if (!cur) { closeRoom(); toast('对局已结束'); }
+    else {
+      renderRoom();
+      // 对手离开 → 启动 3 秒倒计时
+      if (cur.status === 'left' && !S.gameLeaveT) startLeaveCountdown();
+    }
   }
+  // 邀请卡片状态变了就同步聊天区（无论房间是否开着）——
+  // 否则房间开着时卡片会一直停在旧状态（如对方已加入仍显示「等待对方加入」）
+  if (changed && S.cur) renderMsgs();
 }
 function startLeaveCountdown() {
   stopLeaveCountdown();

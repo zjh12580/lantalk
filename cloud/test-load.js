@@ -616,6 +616,29 @@ function makeStub() {
     const gMsg = DATA.messages.slice(nMsg0).find((m) => m.type === 'game');
     log(!!gMsg && gMsg.text === (gameRow && gameRow.id), '发出了 type=game 的按钮消息，text 指向 gameId');
 
+    // 3b) 发起方立刻进入对局页等待：显示棋盘 + 遮罩 + 提示，且不能落子
+    const roomW = D.querySelector('#groom');
+    log(!!roomW && !roomW.classList.contains('hidden'), '发起方立刻进入对局页（浮层已打开）');
+    log(!!(roomW && roomW.querySelector('#gBoard')), '等待态也渲染出棋盘');
+    log(!!(roomW && roomW.querySelector('.gr-waitmask')), '等待态有「等待对方进入」遮罩');
+    log(!!(roomW && /等待对方进入房间/.test(roomW.textContent)), '等待态提示「等待对方进入房间」');
+    {
+      // 点棋盘 → 应提示「对方还未进入房间」，且不产生落子
+      const cv = roomW && roomW.querySelector('#gBoard');
+      const tableBefore = D.querySelector('#toast');
+      if (cv) {
+        const before = JSON.stringify(gameRow.board || []);
+        cv.click();
+        await sleep(200);
+        const toastEl = D.querySelector('#toast');
+        const toastTxt = toastEl ? toastEl.textContent : '';
+        log(/对方还未进入房间/.test(toastTxt) || JSON.stringify(gameRow.board || []) === before,
+          '等待态落子被拦下（提示「对方还未进入房间」或棋盘不变）', toastTxt.slice(0, 40));
+      } else {
+        log(false, '等待态落子被拦下（提示「对方还未进入房间」或棋盘不变）', '无画布');
+      }
+    }
+
     // 4) 聊天区渲染出邀请卡片，发起方自己看到「等待对方加入」（不可点）
     const inv = D.querySelectorAll('#mList .ginvite');
     log(inv.length >= 1, '聊天区渲染出游戏邀请卡片', inv.length);
@@ -745,6 +768,29 @@ function makeStub() {
     await sleep(300);
     const roomEnd = D.querySelector('#groom');
     log(!roomEnd || roomEnd.classList.contains('hidden'), '可离开对局并关闭浮层');
+
+    // 10) 发起方在「等待」阶段提前离开 → 本局作废（置 over），邀请卡片置灰提示过期
+    {
+      const wid = 'gm_waitleave';
+      DATA.games.push({ id: wid, conv: 'g:hall', kind: 'gomoku', host_id: 'u_test', host_name: '云端测试', guest_id: '', guest_name: '', status: 'waiting', turn: 'host', board: [], moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+      DATA.messages.push({ id: ++seq, conv: 'g:hall', sender_id: 'u_test', sender_name: '云端测试', sender_avatar: '', sender_color: '#888', type: 'game', text: wid, mentions: [], created_at: new Date().toISOString() });
+      await sleep(3200);
+      // 进入该局并直接离开（等同点 ✕ → 确认）
+      if (w.LT.openRoom) w.LT.openRoom(wid);
+      await sleep(400);
+      const ex2 = D.querySelector('#grExit');
+      if (ex2) ex2.click();
+      await sleep(250);
+      const cf2 = D.querySelector('#cfOk') || D.querySelector('.dlg .btn.primary');
+      if (cf2) cf2.click();
+      await sleep(1200);
+      const row10 = DATA.games.find((x) => x.id === wid);
+      log(!!row10 && row10.status === 'over', '发起方等待阶段离开：本局标记为 over（保留记录供置灰展示）', row10 ? row10.status : '被删除');
+      const cards10 = D.querySelectorAll('#mList .ginvite');
+      const b10 = cards10.length ? cards10[cards10.length - 1].querySelector('.gbtn') : null;
+      log(!!b10 && b10.classList.contains('dis') && b10.textContent.indexOf('已开始或已过期') >= 0,
+        '离开后邀请卡片置灰「游戏已开始或已过期」', b10 ? b10.textContent : 'none');
+    }
   }
 
   log(D.querySelector('.tabs') === null, '侧栏分类 tab（全部/未读/群聊/好友）已移除');
