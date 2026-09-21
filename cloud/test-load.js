@@ -601,8 +601,8 @@ function makeStub() {
     const names = Array.from(cards).map((c) => c.querySelector('.gnm').textContent);
     log(names.indexOf('五子棋') >= 0 && names.indexOf('围棋') >= 0 && names.indexOf('象棋') >= 0,
       '三种棋类名称正确', names.join('/'));
-    log(Array.from(cards).filter((c) => c.classList.contains('off')).length === 2,
-      '围棋/象棋标记为开发中（不可点）');
+    log(Array.from(cards).filter((c) => c.classList.contains('off')).length === 0,
+      '围棋/象棋已解禁（三种棋都可点）');
 
     // 3) 选五子棋 -> 写入 games 表 + 发一条 type=game 的按钮消息
     const nMsg0 = DATA.messages.length;
@@ -858,6 +858,104 @@ function makeStub() {
       log(!roomP || roomP.classList.contains('hidden'), '对局中确认离开后对局页关闭');
       const rowP = DATA.games.find((x) => x.id === pid);
       log(!!rowP && rowP.status === 'left', '对局中离开置为 left（保留供对方看倒计时）', rowP ? rowP.status : '被删除');
+    }
+
+    // 13) 围棋：可落子、提子、终局数子
+    {
+      const ggRow = { id: 'gm_go', conv: 'g:hall', kind: 'go', host_id: 'u_test', host_name: '云端测试', guest_id: 'u_a', guest_name: '甲', status: 'playing', turn: 'host', board: [], moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      DATA.games.push(ggRow);
+      DATA.messages.push({ id: ++seq, conv: 'g:hall', sender_id: 'u_test', sender_name: '云端测试', sender_avatar: '', sender_color: '#888', type: 'game', text: 'gm_go', mentions: [], created_at: new Date().toISOString() });
+      await sleep(3200);
+      if (w.LT.openRoom) w.LT.openRoom('gm_go');
+      await sleep(400);
+      const ggRoom = D.querySelector('#groom');
+      log(!!ggRoom && /围棋/.test(ggRoom.textContent), '围棋对局页标题含「围棋」');
+      const ggCv = ggRoom && ggRoom.querySelector('#gBoard');
+      log(!!ggCv && ggCv.classList.contains('bd-go'), '围棋画布带 bd-go 皮肤类', ggCv ? ggCv.className : 'none');
+      log(!!ggRoom && !!ggRoom.querySelector('#grGoEnd'), '围棋对局页有「终局数子」按钮');
+      // 直接驱动落子：host 走 1 手 → 棋盘写入 361 长度数组、轮次交给客方
+      if (ggCv && w.LT.S && w.LT.S.gameOpen) {
+        // jsdom 里 canvas 尺寸恒为 0，必须伪造 rect，否则 clientX 换算成 NaN（测试环境限制，非产品 bug）
+        ggCv.getBoundingClientRect = () => ({ left: 0, top: 0, width: 620, height: 620, right: 620, bottom: 620 });
+        const cellG = (620 - 48) / 18;
+        const evt = new w.MouseEvent('click', {
+          clientX: 24 + 3 * cellG, clientY: 24 + 3 * cellG, bubbles: true,
+        });
+        ggCv.dispatchEvent(evt);
+        await sleep(900);
+      }
+      const ggAfter = DATA.games.find((x) => x.id === 'gm_go');
+      log(!!ggAfter && (ggAfter.board || []).length === 361, '围棋落子后棋盘为 361 格', ggAfter ? (ggAfter.board || []).length : 'none');
+      log(!!ggAfter && (ggAfter.board || []).filter((v) => v === 1).length === 1, '围棋落子后黑子数为 1',
+        ggAfter ? (ggAfter.board || []).filter((v) => v === 1).length : 'none');
+      log(!!ggAfter && ggAfter.turn === 'guest', '围棋落子后轮次交给客方', ggAfter ? ggAfter.turn : 'none');
+      // 终局数子：确认后 status=over、winner 为黑方（host）
+      const ggEnd = D.querySelector('#grGoEnd');
+      if (ggEnd) {
+        ggEnd.click();
+        await sleep(300);
+        const okG = D.querySelector('#cfOk');
+        if (okG) okG.click();
+        await sleep(1200);
+        const ggFin = DATA.games.find((x) => x.id === 'gm_go');
+        log(!!ggFin && ggFin.status === 'over', '围棋终局后 status=over', ggFin ? ggFin.status : 'none');
+        log(!!ggFin && ggFin.winner === 'u_test', '围棋数子黑多 → winner 为 host', ggFin ? ggFin.winner : 'none');
+      }
+      if (w.LT.close) w.LT.close();
+      await sleep(300);
+    }
+
+    // 14) 象棋：选中→走子、非法走法被拒
+    {
+      const xqRow = { id: 'gm_xq', conv: 'g:hall', kind: 'xiangqi', host_id: 'u_test', host_name: '云端测试', guest_id: 'u_a', guest_name: '甲', status: 'playing', turn: 'host', board: [], moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      DATA.games.push(xqRow);
+      DATA.messages.push({ id: ++seq, conv: 'g:hall', sender_id: 'u_test', sender_name: '云端测试', sender_avatar: '', sender_color: '#888', type: 'game', text: 'gm_xq', mentions: [], created_at: new Date().toISOString() });
+      await sleep(3200);
+      if (w.LT.openRoom) w.LT.openRoom('gm_xq');
+      await sleep(400);
+      const xqRoom = D.querySelector('#groom');
+      log(!!xqRoom && /象棋/.test(xqRoom.textContent), '象棋对局页标题含「象棋」');
+      const xqCv = xqRoom && xqRoom.querySelector('#gBoard');
+      log(!!xqCv && xqCv.classList.contains('bd-xq'), '象棋画布带 bd-xq 皮肤类', xqCv ? xqCv.className : 'none');
+      // 象棋应使用引擎初始化满盘（红黑各 16 子）
+      const GXeng = w.LT.GX;
+      log(!!GXeng && GXeng.newBoard().length === 90, '导出象棋引擎，棋盘 90 格', GXeng ? GXeng.newBoard().length : 'none');
+      log(!!GXeng && GXeng.newBoard().filter((v) => v > 0).length === 16 && GXeng.newBoard().filter((v) => v < 0).length === 16,
+        '象棋开局红黑各 16 子', GXeng ? (GXeng.newBoard().filter((v) => v > 0).length + '/' + GXeng.newBoard().filter((v) => v < 0).length) : 'none');
+      if (xqCv && w.LT.S && w.LT.S.gameOpen) {
+        // pad 34，格 X=(620-68)/8=69，格 Y=(620-68)/9≈61.33；同上，先伪造 rect
+        xqCv.getBoundingClientRect = () => ({ left: 0, top: 0, width: 620, height: 620, right: 620, bottom: 620 });
+        const cellX = (620 - 68) / 8, cellY = (620 - 68) / 9;
+        const click = (r, c) => {
+          const ev = new w.MouseEvent('click', { clientX: 34 + c * cellX, clientY: 34 + r * cellY, bubbles: true });
+          xqCv.dispatchEvent(ev);
+        };
+        click(9, 0);        // 选中红车
+        await sleep(300);
+        log(!!w.LT.S.xqSel, '象棋：点自己棋子后进入选中态', w.LT.S.xqSel ? w.LT.S.xqSel.join(',') : 'none');
+        click(7, 0);        // 走到 (7,0)
+        await sleep(900);
+        log(!w.LT.S.xqSel, '象棋：走子后清空选中态', String(w.LT.S.xqSel));
+      }
+      const xqAfter = DATA.games.find((x) => x.id === 'gm_xq');
+      log(!!xqAfter && (xqAfter.board || []).length === 90, '象棋走子后棋盘 90 格', xqAfter ? (xqAfter.board || []).length : 'none');
+      if (xqAfter && (xqAfter.board || []).length === 90) {
+        log(xqAfter.board[9 * 9 + 0] === 0, '象棋：起点(9,0)已清空', xqAfter.board[9 * 9 + 0]);
+        log(xqAfter.board[7 * 9 + 0] === 3, '象棋：红车落到目标点(7,0)', xqAfter.board[7 * 9 + 0]);
+        log(xqAfter.turn === 'guest', '象棋：走子后轮次交给客方', xqAfter.turn);
+        const mv0 = (xqAfter.moves || [])[0];
+        log((xqAfter.moves || []).length === 1 && !!mv0 && mv0.fr === 9 && mv0.fc === 0 && mv0.r === 7 && mv0.c === 0,
+          '象棋：moves 记录了起点→终点', JSON.stringify(mv0 || null));
+      }
+      if (w.LT.close) w.LT.close();
+      await sleep(300);
+    }
+
+    // 15) 棋类布局一致性：三种棋画布都用同一 620 逻辑边长（棋盘尽量大）
+    {
+      const B = w.LT.GAME_KINDS;
+      log(!!B && B.gomoku.ready === true && B.go.ready === true && B.xiangqi.ready === true,
+        '三种棋 ready 均为 true', B ? [B.gomoku.ready, B.go.ready, B.xiangqi.ready].join('/') : 'none');
     }
   }
 
