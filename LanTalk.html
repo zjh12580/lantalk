@@ -1413,7 +1413,7 @@ var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, f
 var FILE_MODE = location.protocol === 'file:';
 var BASE = FILE_MODE ? 'http://127.0.0.1:3000' : '';
 var WSBASE = FILE_MODE ? 'ws://127.0.0.1:3000' : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-var BUILD = { sha: '5e23683', date: '2026-09-21', subject: 'chore(version): 版本标识更新至 feat(version) 提交' }; // LT_BUILD
+var BUILD = { sha: 'd2831df', date: '2026-09-21', subject: 'fix(merge): 复原被 origin/main 覆盖的暗色壁纸规则与小美头像' }; // LT_BUILD
 function verTag() { return BUILD.sha + ' · ' + BUILD.date; }
 
 var S = {
