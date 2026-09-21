@@ -1788,6 +1788,15 @@ function makeStub() {
       const wcss = (typeof w.getComputedStyle === 'function' && cvb)
         ? w.getComputedStyle(cvb).width : '';
       log(!wcss || /%|px/.test(wcss), '棋盘宽度由 CSS width 控制（可被 --bh 约束）', wcss || '(jsdom 不解析)');
+      log(!!cvb && typeof w.LT.fitBoard === 'function', '导出 fitBoard 供棋盘自适应调用');
+
+      // 选中玩家条不能有背景填充（border + inset 描边会在圆角内侧叠出深色块，用户反馈多次）
+      const cssTxt = Array.prototype.map.call(D.querySelectorAll('style'), (s) => s.textContent).join('\n');
+      const onRule = (cssTxt.match(/\.groom \.gr-pl\.on\{[^}]*\}/) || [''])[0];
+      log(!!onRule && !/background|color-mix/.test(onRule),
+        '选中玩家条只改边框/文字色，无背景填充', onRule || '(未找到规则)');
+      log(!!onRule && !/box-shadow/.test(onRule),
+        '选中玩家条不再叠第二层描边（避免圆角内侧深色块）', onRule ? 'ok' : '(未找到规则)');
     }
   }
 

@@ -329,10 +329,11 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
   overflow:hidden;align-self:stretch;justify-content:center;max-height:100%}
 .groom .gr-pl{display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:12px;background:var(--bg2);
   border:1px solid var(--bd);font-size:13px;transition:.18s;box-sizing:border-box;min-width:0;flex:0 0 auto}
-/* 选中态用 inset 描边（不能用外扩 box-shadow —— 1px 溢出会被 .gr-side 的 overflow:hidden 裁成一条黑边） */
-.groom .gr-pl.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 10%,var(--bg2));
-  box-shadow:inset 0 0 0 1px var(--brand)}
+/* 选中态：只换边框颜色 + 文字/圆点变品牌色，不加任何背景填充、不叠第二层描边 ——
+   否则 border + inset box-shadow 会在圆角内侧叠出一块突兀的深色矩形。 */
+.groom .gr-pl.on{border-color:var(--brand)}
 .groom .gr-pl .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.groom .gr-pl.on .nm{color:var(--brand)}
 .groom .gr-pl .side{font-size:11px;color:var(--tx3);flex:0 0 auto}
 .groom .gr-pl.on .side{color:var(--brand);font-weight:600}
 .groom .gr-pl .dot{width:7px;height:7px;border-radius:50%;background:var(--tx3);flex:0 0 auto}
@@ -340,7 +341,8 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 /* 左侧的「对局状态」提示条（轮到谁 / 思考中 / 走子提示） */
 .groom .gr-status{padding:9px 12px;border-radius:12px;background:var(--bg2);border:1px solid var(--bd);
   font-size:12.5px;line-height:1.55;color:var(--tx2);text-align:left;box-sizing:border-box;flex:0 0 auto}
-.groom .gr-status.brand{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 10%,var(--bg2));color:var(--brand);font-weight:600}
+/* 统一：状态条「轮到我」也只换边框 + 文字色，不加品牌色背景填充（与玩家条一致） */
+.groom .gr-status.brand{border-color:var(--brand);color:var(--brand);font-weight:600}
 /* 右侧棋盘区：按同一高度预算约束（max-height:100%），避免矮窗口下棋盘被上下裁切 */
 .groom .gr-main{flex:0 1 auto;min-width:0;min-height:0;max-height:100%;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:10px}
