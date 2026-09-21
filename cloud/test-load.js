@@ -603,6 +603,77 @@ function makeStub() {
   D.querySelector('#sideMask').click();
   log(!sideEl.classList.contains('open'), '点遮罩收起侧栏');
 
+  // ===== 本轮修复：侧栏「未读红点」与「最新消息预览」同步 =====
+  // 场景：与「甲」私聊，切到大厅；甲连发 2 条 -> 侧栏该会话应出现红点 2 且预览为最后一条
+  const priA = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
+  if (priA) priA.click();
+  await sleep(700);
+  const hallEl2 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+  if (hallEl2) hallEl2.click();          // 离开私聊，切到大厅（此时甲的消息算未读）
+  await sleep(700);
+  DATA.messages.push({ id: ++seq, conv: 'p:u_a~u_test', sender_id: 'u_a', sender_name: '甲', sender_avatar: '', sender_color: '#e8644a', type: 'text', text: '同步测试第一条', mentions: [], created_at: new Date().toISOString() });
+  DATA.messages.push({ id: ++seq, conv: 'p:u_a~u_test', sender_id: 'u_a', sender_name: '甲', sender_avatar: '', sender_color: '#e8644a', type: 'text', text: '同步测试第二条', mentions: [], created_at: new Date().toISOString() });
+  await sleep(3400);
+  const priEl = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
+  log(!!priEl, '私聊会话仍在侧栏');
+  const badge = priEl ? priEl.querySelector('.badge') : null;
+  log(!!badge && badge.textContent === '2', '侧栏未读红点显示 2 条', badge ? badge.textContent : 'none');
+  const lastTxt = priEl ? priEl.querySelector('.clast').textContent : '';
+  log(lastTxt.indexOf('同步测试第二条') >= 0, '侧栏最新消息预览为最后一条', lastTxt);
+  const sortedFirst = D.querySelectorAll('#cList .conv')[0];
+  log(sortedFirst && sortedFirst.dataset.c === 'p:u_a~u_test', '有新消息的会话置顶', sortedFirst ? sortedFirst.dataset.c : 'none');
+  // 等一次 heavy 轮询（每 4 tick = 10s），确认红点不会被 buildConvs 冲掉
+  await sleep(11000);
+  const priEl2 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
+  const badge2 = priEl2 ? priEl2.querySelector('.badge') : null;
+  log(!!badge2 && badge2.textContent === '2', 'heavy 轮询后未读红点仍为 2（不再被冲掉）', badge2 ? badge2.textContent : 'none');
+  const lastTxt2 = priEl2 ? priEl2.querySelector('.clast').textContent : '';
+  log(lastTxt2.indexOf('同步测试第二条') >= 0, 'heavy 轮询后最新消息预览仍正确', lastTxt2);
+  // 点开该会话 -> 红点消失，且预览保持
+  priEl2.click();
+  await sleep(900);
+  const priEl3 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
+  log(!priEl3.querySelector('.badge'), '点开会话后未读红点消失');
+  log(priEl3.querySelector('.clast').textContent.indexOf('同步测试第二条') >= 0, '读完后预览仍为最后一条');
+  // 切回大厅，便于后续直播用例
+  const hallEl3 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+  if (hallEl3) hallEl3.click();
+  await sleep(700);
+
+  // ===== 本轮修复：自己发消息后，侧栏预览/时间不回退（对应截图 dzp 那条） =====
+  DATA.messages.push({ id: ++seq, conv: 'p:u_test~u_b', sender_id: 'u_b', sender_name: '乙', sender_avatar: '', sender_color: '#555', type: 'text', text: '乙的旧消息', mentions: [], created_at: new Date(Date.now() - 3600000).toISOString() });
+  DATA.friends.push({ a: 'u_test', b: 'u_b', status: 'accepted', created_at: new Date().toISOString() });
+  await sleep(3000);
+  const priB = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_b~u_test')[0];
+  if (priB) priB.click();
+  await sleep(800);
+  D.querySelector('#input').value = '我刚发的最后一条';
+  D.querySelector('#bSend').click();
+  await sleep(900);
+  const priB2 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_b~u_test')[0];
+  log(!!priB2 && priB2.querySelector('.clast').textContent.indexOf('我刚发的最后一条') >= 0,
+    '自己发消息后，侧栏预览立即变为该条', priB2 ? priB2.querySelector('.clast').textContent : 'none');
+  // 关键回归：等 heavy 轮询（buildConvs 会重算），预览不能被旧消息顶回去
+  await sleep(11000);
+  const priB3 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_b~u_test')[0];
+  log(!!priB3 && priB3.querySelector('.clast').textContent.indexOf('我刚发的最后一条') >= 0,
+    'heavy 轮询后侧栏预览仍为自己发的那条（不被 recent 回退）', priB3 ? priB3.querySelector('.clast').textContent : 'none');
+  log(!!priB3 && !priB3.querySelector('.badge'), '自己发消息不产生未读红点');
+
+  // 私聊未读：切走后来消息必须有红点
+  const hallElX = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+  if (hallElX) hallElX.click();
+  await sleep(700);
+  DATA.messages.push({ id: ++seq, conv: 'p:u_b~u_test', sender_id: 'u_b', sender_name: '乙', sender_avatar: '', sender_color: '#555', type: 'text', text: '私聊未读测试', mentions: [], created_at: new Date().toISOString() });
+  await sleep(3400);
+  const priB4 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_b~u_test')[0];
+  const bdg = priB4 ? priB4.querySelector('.badge') : null;
+  log(!!bdg && bdg.textContent === '1', '私聊收到消息：侧栏出现未读红点', bdg ? bdg.textContent : 'none');
+  await sleep(11000);
+  const priB5 = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_b~u_test')[0];
+  const bdg2 = priB5 ? priB5.querySelector('.badge') : null;
+  log(!!bdg2 && bdg2.textContent === '1', 'heavy 轮询后私聊未读红点仍在', bdg2 ? bdg2.textContent : 'none');
+
   // ===== 本轮：大厅直播 =====
   // 回到大厅
   const hallGo = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];

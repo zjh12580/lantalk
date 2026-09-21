@@ -768,8 +768,10 @@ function botSay(conv, text) {
     if (!m) return;
     if (m.id > S.lastId) S.lastId = m.id;   // 自己代发的，别再当成新消息提醒自己
     pushMsg(conv, m);
+    trackRecent(m);                         // 同步 recent，保证侧栏预览/未读不回退
     var c = cm()[conv]; if (c) c.last = m;
-    if (conv === S.cur) renderMsgs('bottom'); else renderConvs();
+    if (conv === S.cur) renderMsgs('bottom');
+    buildConvs(); renderConvs();
   }).catch(function () {});
 }
 function botTyping(conv) {
@@ -876,8 +878,15 @@ function pushMsg(conv, m) {
   (S.anim[conv] = S.anim[conv] || {})[m.id] = 1;   // 标记为「新消息」，仅这条播放入场动画
   return true;
 }
-function pconv(a, b) { return 'p:' + [a, b].sort().join('~'); }
-function gconv(id) { return 'g:' + id; }
+// 把新消息并入 S.recent（buildConvs 依赖它推导最新消息预览与未读数，必须保持最新）
+function trackRecent(m) {
+  if (!m || m.id == null) return;
+  S.recent = S.recent || [];
+  for (var i = 0; i < S.recent.length; i++) { if (String(S.recent[i].id) === String(m.id)) return; }
+  S.recent.push(m);
+  if (S.recent.length > 600) S.recent.splice(0, S.recent.length - 600);
+}
+function pconv(a, b) { return 'p:' + [a, b].sort().join('~'); }function gconv(id) { return 'g:' + id; }
 function newId(p) { return p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function pad(n) { return n < 10 ? '0' + n : '' + n; }
 function fmtTime(ts) { var d = new Date(ts); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
@@ -1235,8 +1244,7 @@ function refreshAll() {
     S.friends = r[3];
     applyReads(r[4]);
     S.recent = r[5];
-    S.lastId = r[5].length ? r[5][0].id : 0;
-    if (S.me) S.me = S.profiles[S.uid] || S.me;
+    S.lastId = r[5].length ? r[5][0].id : 0;    if (S.me) S.me = S.profiles[S.uid] || S.me;
     ensureBot();
     buildConvs();
     renderConvs();
@@ -1247,11 +1255,19 @@ function refreshAll() {
 }
 // 已读记录：reads 表里每人每会话一条
 function applyReads(rows) {
+  var prev = S.reads || {};
   S.readsAll = {};
   S.reads = {};
   (rows || []).forEach(function (x) {
     (S.readsAll[x.conv] = S.readsAll[x.conv] || {})[x.user_id] = x.last_msg_id;
     if (x.user_id === S.uid) S.reads[x.conv] = x.last_msg_id;
+  });
+  // 本地已读位只增不减：服务端回包可能短暂滞后，不能让已读回退导致红点复现
+  Object.keys(prev).forEach(function (cv) {
+    if ((S.reads[cv] || 0) < prev[cv]) {
+      S.reads[cv] = prev[cv];
+      (S.readsAll[cv] = S.readsAll[cv] || {})[S.uid] = prev[cv];
+    }
   });
 }
 // 我发出的消息的已读状态：私聊「已读/未读」；群聊「N/M 已读」，点开看谁读了
@@ -1326,15 +1342,21 @@ function buildConvs() {
     var lc = S.localConvs[cv];
     list.push({ conv: cv, type: lc.type || 'group', id: lc.id || convPeer({ conv: cv }), name: lc.title || cv, avatar: '', color: '#8a8f99', isFriend: false, muted: false, last: null, localOnly: true });
   });
-  // 最近消息 + 未读
+  // 最近消息（侧栏预览/排序依据）
   var lastMap = {};
   (S.recent || []).forEach(function (m) { if (!lastMap[m.conv] || lastMap[m.conv].id < m.id) lastMap[m.conv] = m; });
-  var unread = {};
-  (S.recent || []).forEach(function (m) {
-    var base = S.reads[m.conv] || 0;
-    if (m.id > base && m.sender_id !== S.uid && !m.revoked) unread[m.conv] = (unread[m.conv] || 0) + 1;
-  });
   list.forEach(function (c) { c.last = lastMap[c.conv] || null; });
+  // 未读：以 onNew 增量维护的 S.unread 为准（recent 只保留最近 200 条，不足以全量推导）。
+  // 这里按读取位做「收敛」——已读位已追上/超过该会话最后一条则清零，否则保留增量值。
+  var unread = {};
+  Object.keys(S.unread || {}).forEach(function (cv) {
+    var n = S.unread[cv] || 0;
+    if (n <= 0) return;
+    var lm = lastMap[cv];
+    var base = S.reads[cv] || 0;
+    if (lm && base >= lm.id) return;   // 已读完
+    unread[cv] = n;
+  });
   S.unread = unread;
   S.convs = list;
 }
@@ -1433,28 +1455,27 @@ function syncFriends(rows) {
 }
 function onNew(m) {
   var c = cm()[m.conv];
-  if (!c) { buildConvs(); c = cm()[m.conv]; if (!c) return; }
-  c.last = m;
-  // 侧栏最新消息要即时同步（否则当前会话里对方发来的消息，左侧列表那行还是旧的）。
-  // 无论是否当前会话都重渲染一次；列表重排由 renderConvs 依据 last.id 完成。
-  renderConvs();
-  if (m.sender_id === S.uid) {
-    if (pushMsg(m.conv, m) && m.conv === S.cur) renderMsgs();
-    maybeBotReply(m);   // 自己 @ 小美 / 私聊小美时，由 leader 端代她回复
-    return;
-  }
-  var unreadChanged = m.conv !== S.cur;
-  // 当前会话打开且窗口可见 -> 立刻标记已读
-  if (m.conv === S.cur && !document.hidden) markRead(m.conv);
-  if (unreadChanged) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;
+  if (!c) { buildConvs(); c = cm()[m.conv]; }
+  // 会话对象可能还没建出来（对方第一条消息、群刚拉进来）——先落消息与未读，别丢
+  var isCurrent = m.conv === S.cur;
+  var canRead = isCurrent && !document.hidden && !!c;
+  if (canRead) markRead(m.conv);
   var added = pushMsg(m.conv, m);
-  if (added && m.conv === S.cur) renderMsgs();
+  if (added) trackRecent(m);        // 让 recent 追上最新消息，侧栏预览才不回退
+  if (added && !canRead) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;   // 未读增量（权威）
+  if (added && isCurrent) renderMsgs();
   if (added) maybeBotReply(m);
-  if (!c.muted && unreadChanged && added) {
-    notify(c.name, (c.type === 'group' ? m.sender_name + '：' : '') + preview(m));
-    if (S.sound) beep();
+  if (added && !canRead) {
+    var cname = c ? c.name : (m.sender_name || '新消息');
+    if (!c || !c.muted) {
+      notify(cname, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
+      if (S.sound) beep();
+    }
   }
-  if ((m.mentions || []).indexOf(S.uid) >= 0) { c.atMe = true; toast('🔔 ' + m.sender_name + ' @了你：' + String(m.text || '').slice(0, 30)); }
+  if (c && (m.mentions || []).indexOf(S.uid) >= 0) { c.atMe = true; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
+  // 重算会话列表：最新消息预览 / 排序 / 未读红点一次性对齐
+  if (added) buildConvs();
+  renderConvs();
 }
 function preview(m) {
   if (!m) return '';
@@ -1628,15 +1649,18 @@ function loadHistory(conv, before) {
     S.msgs[conv] = before ? rows.concat(S.msgs[conv] || []) : rows.concat(keep);
     if (!before && keep.length) S.msgs[conv].sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
     S.more[conv] = rows.length === 40;
+    rows.forEach(trackRecent);   // 补齐 recent，避免未读/预览缺失
     renderMsgs(before ? 'keep' : 'bottom');
-    if (!before) markRead(conv);
+    if (!before) { markRead(conv); buildConvs(); renderConvs(); }
   }).catch(function (e) { toast('加载失败：' + (e.message || e), 'err'); });
 }
 S.more = {};
 function markRead(conv) {
   var l = S.msgs[conv] || [];
-  var maxId = S.lastId;
-  l.forEach(function (m) { if (m.id > maxId) maxId = m.id; });
+  var maxId = 0;
+  l.forEach(function (m) { if (Number(m.id) > maxId) maxId = Number(m.id); });
+  // 兜底：本地消息列表可能尚未含最新一条（刚推入但没进 msgs），用 recent 里该会话的最大 id 补
+  (S.recent || []).forEach(function (m) { if (m.conv === conv && Number(m.id) > maxId) maxId = Number(m.id); });
   if (!maxId) return;
   if ((S.reads[conv] || 0) >= maxId) { S.unread[conv] = 0; updTitle(); return; }
   S.reads[conv] = maxId;
@@ -1857,9 +1881,11 @@ function sendMsg(o) {
   };
   return q(db.from('messages').insert(payload).select()).then(function (rows) {
     var m = rows[0];
-    if (m) { if (m.id > S.lastId) S.lastId = m.id; pushMsg(S.cur, m); c.last = m; }
+    // 自己发出的消息同样要写进 recent：否则下一次 buildConvs 会用旧的 recent 回退侧栏预览，
+    // 且侧栏未读统计也会因 recent 不完整而算错（表现为「最新消息/时间对不上」「私聊没有未读红点」）。
+    if (m) { if (m.id > S.lastId) S.lastId = m.id; pushMsg(S.cur, m); trackRecent(m); c.last = m; }
     S.reply = null; $('#rBar').classList.add('hidden');
-    renderMsgs('bottom'); renderConvs();
+    renderMsgs('bottom'); buildConvs(); renderConvs();
     if (m) maybeBotReply(m);
     return m;
   }).catch(function (e) { toast('发送失败：' + (e.message || e), 'err'); });
