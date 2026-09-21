@@ -504,7 +504,7 @@ var S = {
   botMenuAt: {},         // 会话 -> 最近一次展示技能菜单的时间（5 分钟内可直选序号）
   botBackup: {},         // 小美回复兜底定时器（leader 未回时补发）
 };
-var BUILD = { sha: '934ce3b', date: '2026-09-21', subject: 'feat(version): 设置面板显示当前版本号（以 git 提交为版本标识）' }; // LT_BUILD
+var BUILD = { sha: '5e23683', date: '2026-09-21', subject: 'chore(version): 版本标识更新至 feat(version) 提交' }; // LT_BUILD
 // 版本标识：以 git 提交号为版本（由 scripts/stamp-version.mjs 写入 BUILD）
 function verTag() { return BUILD.sha + ' · ' + BUILD.date; }
 // 机器人「小美」：气氛组，@她会接话，也会不定时主动冒泡
