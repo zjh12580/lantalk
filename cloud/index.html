@@ -1264,14 +1264,16 @@ function emojiPickerHtml(opts) {
   return '<div class="emo-pager">' + inner + '</div>'
     + (withClose ? '<div class="epopclose" id="epopClose">关闭 ✕</div>' : '');
 }
-function showPg(root, idx) {
+function showPg(root, idx, place) {
   var wrap = root.querySelector('.emo-pager'); if (!wrap) return;
   var n = EMOJI_GROUPS.length; if (!n) return;
   idx = ((idx % n) + n) % n;
   wrap.setAttribute('data-cur', String(idx));
   $qa(wrap, '.emo-pg').forEach(function (p) { p.style.display = (Number(p.dataset.g) === idx) ? '' : 'none'; });
+  // 翻页后面板高度变了 → 立刻按新高度重排（底边锚定，上方伸缩）
+  if (typeof place === 'function') place();
 }
-function bindEmojiPicker(root, onPick, getVal, after) {
+function bindEmojiPicker(root, onPick, getVal, after, place) {
   if (!root) return;
   $qa(root, 'span[data-e]').forEach(function (s) {
     s.onclick = function () {
@@ -1281,10 +1283,10 @@ function bindEmojiPicker(root, onPick, getVal, after) {
     };
   });
   $qa(root, '.ep-nav[data-p]').forEach(function (b) {
-    b.onclick = function (ev) { ev.stopPropagation(); showPg(root, Number(b.dataset.p)); };
+    b.onclick = function (ev) { ev.stopPropagation(); showPg(root, Number(b.dataset.p), place); };
   });
   $qa(root, '.ep-dots i[data-p]').forEach(function (d) {
-    d.onclick = function (ev) { ev.stopPropagation(); showPg(root, Number(d.dataset.p)); };
+    d.onclick = function (ev) { ev.stopPropagation(); showPg(root, Number(d.dataset.p), place); };
   });
   var wrap = root.querySelector('.emo-pager');
   var cur = wrap ? Number(wrap.getAttribute('data-cur') || 0) : 0;
@@ -2510,7 +2512,10 @@ function renderInfo() {
         + '<button class="btn primary" id="acBtn" style="' + bs + '">接受</button>'
         + '<button class="btn ghost" id="rjBtn" style="' + bs + '">拒绝</button></span></div>';
     } else {
-      frow = '<div class="row"><span>非好友</span><button class="btn primary" id="afBtn" style="' + bs + '">加为好友</button></div>';
+      // 机器人（小美）没有「等待对方确认」这一步，文案直接说清楚
+      var isBotTarget = c.id === BOT.id;
+      frow = '<div class="row"><span>' + (isBotTarget ? '还没加小美为好友' : '非好友') + '</span>'
+        + '<button class="btn primary" id="afBtn" style="' + bs + '">' + (isBotTarget ? '添加小美为好友' : '加为好友') + '</button></div>';
     }
     var on = onlineOf(c.id);
     bar.innerHTML = '<div class="ihead">' + avOf(p.nickname, p.avatar, p.color, 'l')
@@ -2606,6 +2611,18 @@ function sendFriendReq(pid) {
     toast(rel.status === 'accepted' ? '你们已经是好友了' : '请求已发送，等待对方确认');
     return;
   }
+  // 机器人（小美）没有「确认」这一步：直接成为好友，立即可私聊
+  // 注意：RLS 策略 friends_insert 只允许写 a = auth.uid() 的行，故只写自己这一侧；
+  // isFriend / friendRel 都是双向匹配，单边记录已足够。
+  if (pid === BOT.id) {
+    q(db.from('friends').upsert({ a: S.uid, b: BOT.id, status: 'accepted', created_at: new Date().toISOString() }))
+      .then(function () {
+        return q(db.from('messages').insert({ conv: pconv(S.uid, BOT.id), type: 'system', text: '你们已成为好友，@我我就说话 🌸' })).catch(function () { return null; });
+      })
+      .then(function () { toast('已添加小美为好友，可以直接找她聊天啦 🌸'); refreshAll(); })
+      .catch(function (e) { toast('添加失败：' + (e.message || e), 'err'); });
+    return;
+  }
   // 用 upsert：重复点也不会撞主键报错，只是把已有请求刷新一遍
   q(db.from('friends').upsert({ a: S.uid, b: pid, status: 'pending', message: '你好，加个好友', created_at: new Date().toISOString() }))
     .then(function () { toast('好友请求已发送'); refreshAll(); })
@@ -2674,8 +2691,16 @@ function placePop(pop, btn) {
   var w = pop.offsetWidth || 320;
   var h = pop.offsetHeight || 210;
   var left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
-  var top = r.top - h - 8;
-  if (top < 8) top = Math.min(r.bottom + 8, window.innerHeight - h - 8);
+  var vh = window.innerHeight;
+  // 底边锚定：面板底边钉在按钮上方 8px，高度变化时只向上伸缩（上方收缩），底边不动
+  var bottom = r.top - 8;
+  var top = bottom - h;
+  // 上方越界 → 翻到按钮下方（此时顶边锚定在按钮下方 8px，高度变化向下伸缩）
+  if (top < 8) {
+    var below = r.bottom + 8;
+    // 按钮下方放得下就锚定在下方；放不下则贴屏幕顶部（保证尽可能多内容可见、位置稳定不跳）
+    top = (below + h <= vh - 8) ? below : 8;
+  }
   pop.style.left = Math.max(8, left) + 'px';
   pop.style.top = Math.max(8, top) + 'px';
 }
@@ -2703,7 +2728,9 @@ $('#bEmo').onclick = function () {
   closePops();
   pop.innerHTML = emojiPickerHtml({ close: true });
   pop.classList.remove('hidden');
-  bindEmojiPicker(pop, function (e) { $('#input').value += e; }, function () { return ''; }, null);
+  // 最后一参 placePop：翻页导致高度变化时，按新高度重排（底边不动，上方伸缩）
+  bindEmojiPicker(pop, function (e) { $('#input').value += e; }, function () { return ''; }, null,
+    function () { placePop(pop, $('#bEmo')); });
   $qa(pop, 'span[data-e]').forEach(function (s) {
     s.onclick = function () { $('#input').value += s.dataset.e; closePops(); $('#input').focus(); };
   });

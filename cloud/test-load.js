@@ -313,6 +313,27 @@ function makeStub() {
   log(popBottom <= btnRect.top || popTop >= btnRect.bottom,
     '面板定位不遮挡表情按钮（面板 ' + popTop + '~' + popBottom + '，按钮 ' + btnRect.top + '~' + btnRect.bottom + '）');
 
+  // 翻页导致面板高度变化时：底边锚定不动，只向上收缩（上方伸缩，下方不收缩）
+  {
+    const H_ANCHOR = 692;                     // = 按钮 top(700) - 8
+    const heights = [210, 160, 120, 90];
+    const bottoms = [];
+    let allNearBottom = true;
+    heights.forEach((h) => {
+      Object.defineProperty(epop, 'offsetHeight', { value: h, configurable: true });
+      bEmo.click();                            // 关
+      bEmo.click();                            // 开（触发 placePop 重排）
+      const t = parseFloat(epop.style.top || '-1');
+      bottoms.push(t + h);
+      if (Math.abs(t + h - H_ANCHOR) > 1) allNearBottom = false;
+    });
+    log(allNearBottom, '面板高度变化时底边保持不动（上方伸缩，下方不收缩）', 'bottom=' + bottoms.join(','));
+    const tops = bottoms.map((b, i) => b - heights[i]);
+    const ascending = tops.every((v, i) => i === 0 || v >= tops[i - 1]);
+    log(ascending, '面板变矮时顶边下移（顶部收缩而非底部收缩）', 'top=' + tops.join(','));
+    Object.defineProperty(epop, 'offsetHeight', { value: 210, configurable: true });
+  }
+
   // 1) 选表情后自动关闭
   epop.querySelector('span[data-e]').click();
   log(epop.classList.contains('hidden'), '选中表情后面板自动关闭');
@@ -508,6 +529,55 @@ function makeStub() {
     await sleep(400);
     const botCountAfter = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei').length;
     log(botCountAfter === botCountBefore, '小美不再主动冒泡（不 @ 不发言）', botCountBefore + ' -> ' + botCountAfter);
+  }
+
+  // ===== 本轮：加小美为好友 -> 直接成为好友，且私聊等同于 @ 她 =====
+  {
+    // 清掉可能存在的既有关系，确保测的是「首次添加」
+    DATA.friends = DATA.friends.filter((f) => !(f.a === 'u_test' && f.b === 'bot_xiaomei') && !(f.b === 'u_test' && f.a === 'bot_xiaomei'));
+    // 进入与小美的私聊，打开资料页
+    if (D.querySelector('#info').classList.contains('hidden')) D.querySelector('#bInfo').click();
+    await sleep(500);
+    const xm = D.querySelector('#info .mem[data-u="bot_xiaomei"]');
+    if (xm) xm.click();
+    await sleep(800);
+    log(D.querySelector('#cName') && D.querySelector('#cName').textContent === '小美', '可从大厅成员点开与小美的私聊', D.querySelector('#cName') && D.querySelector('#cName').textContent);
+
+    if (!D.querySelector('#info').classList.contains('hidden')) D.querySelector('#bInfo').click();
+    await sleep(500);
+    const afBtn = D.querySelector('#afBtn');
+    log(!!afBtn && afBtn.textContent.indexOf('添加小美为好友') >= 0, '小美资料页按钮文案为「添加小美为好友」', afBtn ? afBtn.textContent : 'none');
+
+    // 记录点之前的消息数，便于校验系统提示
+    const msgBefore = DATA.messages.length;
+    if (afBtn) afBtn.click();
+    await sleep(900);
+
+    const relXm = DATA.friends.filter((f) => ((f.a === 'u_test' && f.b === 'bot_xiaomei') || (f.b === 'u_test' && f.a === 'bot_xiaomei')));
+    log(relXm.length >= 1, '加小美：直接写入好友关系（无需对方确认）', JSON.stringify(relXm));
+    log(relXm.length >= 1 && relXm.every((f) => f.status === 'accepted'), '与小美的关系状态直接为 accepted', relXm.map((f) => f.status).join(','));
+    log(DATA.messages.length > msgBefore && DATA.messages.slice(msgBefore).some((m) => m.type === 'system'), '加小美后写入一条系统提示消息');
+
+    // 关键：私聊小美 = 在大厅 @她，效果一致（都会自动回复）
+    const n0 = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei').length;
+    D.querySelector('#input').value = '讲个笑话';
+    D.querySelector('#bSend').click();
+    await sleep(3000);
+    const n1 = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei').length;
+    log(n1 > n0, '私聊小美（不带 @）也会自动回复，效果等同群聊 @她', n0 + ' -> ' + n1);
+    const lastBot = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei').slice(-1)[0];
+    log(!!lastBot && lastBot.conv === 'p:bot_xiaomei~u_test', '小美的回复落在与小美的私聊会话里', lastBot ? lastBot.conv : 'none');
+
+    // 已是好友后再看资料页，应显示「好友」而非再次添加
+    // #bInfo 是开关：先确保面板可见，再强制重渲染以拿到最新好友关系
+    if (D.querySelector('#info').classList.contains('hidden')) { D.querySelector('#bInfo').click(); await sleep(400); }
+    // 好友关系落库后 refreshAll 是异步的，多等一会儿再重渲染
+    await sleep(1200);
+    D.querySelector('#bInfo').click(); await sleep(200);   // 关
+    D.querySelector('#bInfo').click(); await sleep(600);   // 开（触发 renderInfo）
+    log(D.querySelector('#info').textContent.indexOf('好友') >= 0 && !D.querySelector('#afBtn'),
+      '成为好友后资料页显示「好友」且不再出现添加按钮',
+      (D.querySelector('#info').textContent || '').replace(/\s+/g, ' ').slice(0, 70));
   }
 
   // ===== 本轮修复：侧栏不再有分类 tab =====
