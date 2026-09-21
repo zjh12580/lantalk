@@ -112,6 +112,8 @@ let __updateFail = false;      // 置 true 时模拟网关「落盘成功但响�
 let __existsCalls = 0;
 let __puts = [];               // 手动 PUT 兜底的调用记录
 let __weatherOk = true;        // open-meteo 天气源是否可用
+let __searchCalls = [];        // 联网检索源的调用记录
+let __searchOk = true;         // 检索源是否可用（false 时全部拒绝，验证优雅降级）
 // Keyless LLM 网关桩状态：默认给出与云上一致的目录（含 4 个 deepseek 候选）
 let __llmListCalls = 0;
 let __llmListFail = false;
@@ -216,6 +218,29 @@ function makeStub() {
               current: { temperature_2m: 21.3, apparent_temperature: 20.1, relative_humidity_2m: 40, weather_code: 1, wind_speed_10m: 9.2 },
               daily: { time: ['2026-09-18', '2026-09-19'], temperature_2m_max: [26, 27], temperature_2m_min: [15, 16], weather_code: [0, 2] },
             }),
+          });
+        }
+        // 联网检索源：维基百科中文 / DuckDuckGo / 维基英文
+        if (url.indexOf('zh.wikipedia.org') >= 0 || url.indexOf('en.wikipedia.org') >= 0) {
+          __searchCalls.push(url);
+          if (!__searchOk) return Promise.reject(new Error('search down'));
+          return Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({
+              query: { search: [
+                { title: '物理设计', snippet: '物理设计是集成电路设计的一个阶段，<span class="searchmatch">Innovus</span> 是常用工具。' },
+                { title: '静态时序分析', snippet: '静态时序分析用于验证数字电路时序是否满足约束。' },
+                { title: 'Cadence Design Systems', snippet: 'Cadence 是 EDA 软件厂商。' },
+              ] },
+            }),
+          });
+        }
+        if (url.indexOf('api.duckduckgo.com') >= 0) {
+          __searchCalls.push(url);
+          if (!__searchOk) return Promise.reject(new Error('search down'));
+          return Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve({ Heading: 'EDA', AbstractText: '电子设计自动化', AbstractURL: 'https://example.com/eda', RelatedTopics: [] }),
           });
         }
         return Promise.reject(new Error('no network in test'));
@@ -1352,6 +1377,75 @@ function makeStub() {
   DATA.live.length = 0;
   await sleep(3000);
   log(D.querySelector('#liveBar').classList.contains('hidden'), '主播下线后提示行自动隐藏');
+
+  // ===== 本轮新功能：小美联网检索（手工 RAG）=====
+  {
+    const LT = w.LT;
+    const src2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+
+    // 1) 接入方式：只能是「免 key + 支持 CORS」的公开源（静态托管起不了后端进程）
+    log(!/sk-[A-Za-z0-9]{16,}/.test(src2), '检索链路同样无硬编码密钥');
+    log(/SEARCH_SOURCES/.test(src2) && /origin=\*/.test(src2),
+      '检索源用维基百科 API 且显式带 origin=* （免 key + CORS）');
+    log(/zh\.wikipedia\.org/.test(src2) && /api\.duckduckgo\.com/.test(src2),
+      '检索源至少两路（维基中文 + DuckDuckGo），单源挂掉不影响');
+    log(/function searchWeb/.test(src2) && /fetchFirst\(SEARCH_SOURCES/.test(src2),
+      'searchWeb 走多源轮询 fetchFirst');
+
+    // 2) 「该不该联网」判定：显式检索词必搜、纯闲聊不搜
+    if (LT && LT.searchNeed) {
+      log(LT.searchNeed('查一下 Innovus 的物理设计流程') === true, '显式「查一下」→ 判定需要联网');
+      log(LT.searchNeed('今天有什么新闻') === true, '含「今天/新闻」→ 判定需要联网');
+      log(LT.searchNeed('你好呀') === false, '两个字的打招呼 → 不联网（省一次请求）');
+      log(LT.searchNeed('哈哈哈哈哈') === false, '短纯闲聊 → 不联网');
+    } else {
+      log(false, 'window.LT.searchNeed 已导出', LT ? Object.keys(LT).join(',') : 'no LT');
+    }
+
+    // 3) 检索结果解析：真实调用一次（桩返回维基结构）
+    if (LT && LT.searchWeb) {
+      __searchCalls = [];
+      __searchOk = true;
+      const rows = await LT.searchWeb('Innovus 物理设计');
+      log(Array.isArray(rows) && rows.length >= 3, '检索返回条目数组（≥3 条）', Array.isArray(rows) ? rows.length : typeof rows);
+      log(rows.length > 0 && rows[0].title === '物理设计', '条目 title 正确解析', rows[0] && rows[0].title);
+      log(rows.length > 0 && !/<span/.test(rows[0].snippet || ''),
+        '条目 snippet 已剥掉 HTML 标签（避免把 <span> 喂给模型）', rows[0] && String(rows[0].snippet).slice(0, 40));
+      log(__searchCalls.length === 1 && /zh\.wikipedia\.org/.test(__searchCalls[0]),
+        '首源命中即止（不把所有源都打一遍）', __searchCalls.length + ' 次');
+      log(/srsearch=Innovus%20%E7%89%A9%E7%90%86%E8%AE%BE%E8%AE%A1/.test(__searchCalls[0] || ''),
+        '关键词已 URL 编码拼接', (__searchCalls[0] || '').slice(-46));
+    }
+
+    // 4) 全源挂掉 → 优雅降级（返回空数组，不抛异常）
+    if (LT && LT.searchWeb) {
+      __searchOk = false;
+      __searchCalls = [];
+      const rowsDown = await LT.searchWeb('Innovus 物理设计');
+      log(Array.isArray(rowsDown) && rowsDown.length === 0, '检索源全挂 → 返回空数组（不抛错）', JSON.stringify(rowsDown));
+      log(__searchCalls.length >= 2, '失败后才轮询到下一个源', __searchCalls.length + ' 次');
+      __searchOk = true;
+    }
+
+    // 5) botSearch 的输出文案：有资料 / 无资料两种
+    if (LT && LT.botSearch) {
+      __searchOk = true;
+      const sGot = await LT.botSearch('帮我查一下 Innovus 物理设计');
+      log(sGot.indexOf('🔎') === 0 && sGot.indexOf('物理设计') >= 0, '检索成功 → 输出带 🔎 前缀的资料列表', sGot.slice(0, 34).replace(/\n/g, ' '));
+      log(sGot.indexOf('Innovus') >= 0, '资料里带回了关键词相关内容');
+      __searchOk = false;
+      const sNone = await LT.botSearch('帮我查一下 Innovus 物理设计');
+      log(sNone.indexOf('🔎') >= 0 && sNone.indexOf('连不上') >= 0, '检索失败 → 诚实说明连不上（不假装知道）', sNone.slice(0, 34));
+      __searchOk = true;
+    }
+
+    // 6) 检索资料真的拼进了 LLM 的 system 提示（手工 RAG 的关键一环）
+    log(/botLLM\(text, who, conv, ref\)/.test(src2) || /botLLM\([^)]*ref\)/.test(src2),
+      'botLLM 接受第 4 个参数 ref（检索资料）');
+    log(/联网检索到的资料/.test(src2), 'system 提示里明确要求「优先依据资料回答、查不到就说查不到」');
+    log(/await searchWeb\(/.test(src2), 'botReply 的闲聊分支会先 searchWeb 再喂模型');
+    log(/S\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
+  }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
   console.log('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败\n');
