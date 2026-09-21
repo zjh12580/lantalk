@@ -711,15 +711,60 @@ function botSay(conv, text) {
     if (conv === S.cur) renderMsgs('bottom'); else renderConvs();
   }).catch(function () {});
 }
-function botTyping(conv) {
+// ---------- 正在输入（信令走 profiles.signature：全员可读、本人可写，零建表） ----------
+var TYPING_MARK = '\u2328';   // ⌨ 打字标记前缀，正常签名不会以它开头
+var botTypingConv = null;     // 小美正在输入的会话（null=没有）
+var typingSig = { orig: null, sent: 0, stopT: null, active: false };
+
+function cleanSig(s) { return typeof s === 'string' && s.indexOf(TYPING_MARK) === 0 ? '' : (s || ''); }
+
+function typingBeacon() {
+  var now = Date.now();
+  if (!typingSig.active) { typingSig.active = true; typingSig.orig = cleanSig(S.me && S.me.signature); }
+  typingSig.stopT && clearTimeout(typingSig.stopT);
+  typingSig.stopT = setTimeout(typingStop, 4500);
+  if (now - typingSig.sent < 3000) return;   // 节流：3 秒上报一次
+  typingSig.sent = now;
+  db.from('profiles').update({ signature: TYPING_MARK + S.cur + '|' + now }).eq('id', S.uid)
+    .then(function () {}).catch(function () {});
+}
+function typingStop() {
+  if (!typingSig.active) return;
+  typingSig.active = false;
+  typingSig.stopT && clearTimeout(typingSig.stopT);
+  db.from('profiles').update({ signature: typingSig.orig }).eq('id', S.uid)
+    .then(function () {}).catch(function () {});
+}
+// 读端：从 profiles 里解析「当前会话谁在打字」（标记 8 秒内有效），叠加小美的打字状态
+function updateTyping() {
   var bar = $('#typBar');
   if (!bar) return;
-  bar.innerHTML = '<span class="tav">' + avOf(BOT.name, BOT.avatar, BOT.color, 's') + '</span>'
+  if (!S.cur) { bar.classList.add('hidden'); return; }
+  var names = [], who = null, cut = Date.now() - 8000;
+  Object.keys(S.profiles).forEach(function (id) {
+    if (id === S.uid || id === BOT.id) return;
+    var p = S.profiles[id];
+    if (!p || typeof p.signature !== 'string' || p.signature.indexOf(TYPING_MARK) !== 0) return;
+    var parts = p.signature.slice(1).split('|');
+    if (parts[0] !== S.cur || +parts[1] < cut || !onlineOf(id)) return;
+    names.push(p.nickname || '有人');
+    if (!who) who = p;
+  });
+  var botOn = botTypingConv === S.cur && Date.now() < (S.botTypingUntil || 0);
+  if (!names.length && !botOn) { bar.classList.add('hidden'); return; }
+  var a = who || BOT;
+  var label = names.length ? (names.length <= 2 ? names.join('、') : names.slice(0, 2).join('、') + ' 等') : BOT.name;
+  bar.innerHTML = '<span class="tav">' + avOf(a.nickname || a.name, a.avatar, a.color, 's') + '</span>'
     + '<div class="tbub"><span class="tdots"><i></i><i></i><i></i></span>'
-    + '<span class="ttxt">' + esc(BOT.name) + ' 正在输入…</span></div>';
+    + '<span class="ttxt">' + esc(label) + ' 正在输入…</span></div>';
   bar.classList.remove('hidden');
+}
+function botTyping(conv) {
+  botTypingConv = conv;
+  S.botTypingUntil = Date.now() + 1500;
+  updateTyping();
   clearTimeout(S.botTyping);
-  S.botTyping = setTimeout(function () { bar.classList.add('hidden'); }, 1400);
+  S.botTyping = setTimeout(function () { botTypingConv = null; updateTyping(); }, 1500);
 }
 // @小美 → 她接话（技能可能要联网，异步完成后统一走 botSay）
 function botReply(conv, text, who) {
@@ -1216,22 +1261,24 @@ function tick() {
   var jobs = [
     q(db.from('messages').select('*').gt('id', S.lastId).order('id', { ascending: true }).limit(200)),
     q(db.from('friends').select('*')),
+    q(db.from('profiles').select('*')),   // 每轮都拉（表很小）：「正在输入」状态 2.5 秒内可见
   ];
-  if (heavy) jobs.push(q(db.from('profiles').select('*')), q(db.from('group_members').select('*')), q(db.from('groups').select('*')), q(db.from('reads').select('*')));
+  if (heavy) jobs.push(q(db.from('group_members').select('*')), q(db.from('groups').select('*')), q(db.from('reads').select('*')));
   Promise.all(jobs).then(function (r) {
     var fresh = r[0];
     syncFriends(r[1]);
+    S.profiles = {}; r[2].forEach(function (p) { S.profiles[p.id] = p; });
+    ensureBot();   // 小美不在真实 profiles 表里，profiles 每轮重建后都要补回，否则 light 轮询会把她洗掉
     if (heavy) {
-      S.profiles = {}; r[2].forEach(function (p) { S.profiles[p.id] = p; });
       S.members = {}; S.myMuted = {};
       r[3].forEach(function (m) { (S.members[m.group_id] = S.members[m.group_id] || []).push(m.user_id); if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
       S.groups = r[4];
       applyReads(r[5]);
-      ensureBot();
       buildConvs();
       updateOnline();
       if (S.cur) renderMsgs();
     }
+    updateTyping();
     fresh.forEach(function (m) {
       if (m.id > S.lastId) S.lastId = m.id;
       onNew(m);
@@ -1372,7 +1419,7 @@ function renderMe() {
   var av = $('#meAv');
   av.textContent = S.me.avatar || (S.me.nickname || '?').charAt(0).toUpperCase();
   av.style.background = S.me.color;
-  $('#meSig').textContent = S.me.signature || '在线';
+  $('#meSig').textContent = cleanSig(S.me.signature) || '在线';
 }
 function renderConvs() {
   var list = S.convs.slice();
@@ -1429,6 +1476,7 @@ function openConv(conv) {
     ensureConv(conv, p ? 'private' : 'group', p || conv.slice(2));
   }
   S.cur = conv;
+  typingStop();
   $('#cEmpty').classList.add('hidden');
   $('#cMain').classList.remove('hidden');
   var c = cm()[conv];
@@ -1754,6 +1802,7 @@ function uploadAttach(a) {
 function doSend() {
   var el = $('#input');
   if (!S.cur) return;
+  typingStop();
   var text = el.value.replace(/\s+$/, '');
   var atts = S.attach.slice();
   if (!text.trim() && !atts.length) return;
@@ -1783,7 +1832,7 @@ $('#bSend').onclick = doSend;
 $('#input').addEventListener('keydown', function (e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
 });
-$('#input').addEventListener('input', autoH);
+$('#input').addEventListener('input', function () { autoH(); if (S.cur) typingBeacon(); });
 function autoH() { var el = $('#input'); el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 140) + 'px'; }
 $('#rCancel').onclick = function () { S.reply = null; $('#rBar').classList.add('hidden'); };
 
@@ -2104,7 +2153,7 @@ $('#meBox').onclick = function () {
     + '<div style="text-align:center;margin:10px 0">' + avOf(S.me.nickname, S.me.avatar, S.me.color, 'l') + '</div>'
     + '<label>昵称（全服唯一）</label><input class="inp" id="mName" value="' + esc(S.me.nickname) + '" maxlength="16">'
     + '<label>头像（点击选择表情）</label><div class="emo-grid" id="mEmo"></div>'
-    + '<label>个性签名</label><input class="inp" id="mSig" value="' + esc(S.me.signature || '') + '" placeholder="一句话介绍自己">'
+    + '<label>个性签名</label><input class="inp" id="mSig" value="' + esc(cleanSig(S.me.signature)) + '" placeholder="一句话介绍自己">'
     + '<div class="acts"><button class="btn" onclick="LT.close()">取消</button><button class="btn primary" id="mSave">保存</button></div>');
   var pick = S.me.avatar || '';
   $('#mEmo').innerHTML = EMOJIS.map(function (e) { return '<span data-e="' + e + '" class="' + (e === pick ? 'on' : '') + '">' + e + '</span>'; }).join('');
