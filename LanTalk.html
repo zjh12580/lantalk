@@ -1413,7 +1413,7 @@ var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, f
 var FILE_MODE = location.protocol === 'file:';
 var BASE = FILE_MODE ? 'http://127.0.0.1:3000' : '';
 var WSBASE = FILE_MODE ? 'ws://127.0.0.1:3000' : (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-var BUILD = { sha: 'f4c9660', date: '2026-09-21', subject: 'fix(layout): .msgs 补 min-height:0 防消息区撑开布局；头像点击改为光标处插入 @ 并修正提示文案' }; // LT_BUILD
+var BUILD = { sha: '934ce3b', date: '2026-09-21', subject: 'feat(version): 设置面板显示当前版本号（以 git 提交为版本标识）' }; // LT_BUILD
 function verTag() { return BUILD.sha + ' · ' + BUILD.date; }
 
 var S = {
