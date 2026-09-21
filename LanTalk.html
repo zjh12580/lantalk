@@ -702,18 +702,22 @@ function handleWS(conn, pkt) {
     const inBotChat = d.conv.indexOf('p:') === 0 && d.conv.indexOf(BOT) >= 0;
     if (((m.mentions || []).indexOf(BOT) >= 0 || inBotChat) && user.id !== BOT) {
       const who = user.name;
+      // 小美开始「输入中」（头像 + 三圆点气泡），与真人输入中走同一套渲染
+      const botTyp = { t: 'typing', d: { conv: d.conv, userId: BOT, name: '小美', avatar: '👩‍💻', color: '#e0518f', on: true } };
+      const botTypOff = { t: 'typing', d: { conv: d.conv, userId: BOT, name: '小美', avatar: '👩‍💻', color: '#e0518f', on: false } };
+      push(d.conv, botTyp);
       let ans = null;
       try { ans = botAnswer(d.text, who, d.conv); } catch (e) { ans = null; }
       Promise.resolve(ans).then(function (s) {
         const out = s ? String(s).replace(/\{n\}/g, who || '你').replace(/\{t\}/g, botTime()) : botPick(BOT_LINES);
-        setTimeout(function () { botSay(d.conv, out); }, 600 + Math.floor(Math.random() * 500));
-      }).catch(function () {});
+        setTimeout(function () { botSay(d.conv, out); push(d.conv, botTypOff); }, 600 + Math.floor(Math.random() * 500));
+      }).catch(function () { push(d.conv, botTypOff); });
     }
     return;
   }
   if (t === 'typing') {
     if (!canAccess(user.id, d.conv)) return;
-    push(d.conv, { t: 'typing', d: { conv: d.conv, userId: user.id, name: user.name, on: !!d.on } }, conn);
+    push(d.conv, { t: 'typing', d: { conv: d.conv, userId: user.id, name: user.name, avatar: user.avatar, color: user.color, on: !!d.on } }, conn);
     return;
   }
   if (t === 'read') {
@@ -970,7 +974,10 @@ function startBot() {
     const idle = last ? now() - last.createdAt : 9e9;
     if (idle > 25 * 60 * 1000 && Math.random() > 0.45) return;
     botLast = now();
-    botSay('g:hall', botPick(BOT_LINES));
+    const botTyp = { t: 'typing', d: { conv: 'g:hall', userId: BOT, name: '小美', avatar: '👩‍💻', color: '#e0518f', on: true } };
+    const botTypOff = { t: 'typing', d: { conv: 'g:hall', userId: BOT, name: '小美', avatar: '👩‍💻', color: '#e0518f', on: false } };
+    push('g:hall', botTyp);
+    setTimeout(function () { botSay('g:hall', botPick(BOT_LINES)); push('g:hall', botTypOff); }, 800 + Math.floor(Math.random() * 700));
   }, 60000);
 }
 function ensureBot() {
@@ -1175,7 +1182,15 @@ body.theme-light .join{background:radial-gradient(circle at 30% 20%,#dff0e6,var(
 .ops button{background:none;border:none;color:var(--tx3);cursor:pointer;font-size:11px;padding:0}
 .ops button:hover{color:var(--brand)}
 .rev{font-size:12px;color:var(--tx3);font-style:italic;padding:6px 10px;background:var(--bg3);border-radius:8px;display:inline-block}
-.typ{padding:2px 20px 6px;font-size:12px;color:var(--brand);height:22px}
+.typ{display:flex;align-items:center;gap:8px;padding:4px 16px 10px;background:var(--bg)}
+.typ .tav .av{width:28px;height:28px;font-size:14px;border-radius:8px}
+.tbub{display:inline-flex;align-items:center;gap:8px;background:var(--bb);color:var(--bbtx);padding:9px 14px;border-radius:4px 14px 14px 14px}
+.tdots{display:inline-flex;gap:4px;align-items:center}
+.tdots i{width:6px;height:6px;border-radius:50%;background:var(--tx2);animation:typdot 1.2s ease-in-out infinite}
+.tdots i:nth-child(2){animation-delay:.15s}
+.tdots i:nth-child(3){animation-delay:.3s}
+@keyframes typdot{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-4px);opacity:1}}
+.typ .ttxt{font-size:12px;color:var(--tx3)}
 .rbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 16px;background:var(--bg3);border-top:1px solid var(--bd);font-size:12px;color:var(--tx2)}
 .rbar span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .comp{border-top:1px solid var(--bd);padding:8px 12px 12px;background:var(--bg2)}
@@ -1588,7 +1603,7 @@ function onEvent(p) {
     }
   } else if (p.t === 'typing') {
     S.typing[d.conv] = S.typing[d.conv] || {};
-    if (d.on) S.typing[d.conv][d.userId] = { name: d.name, ts: Date.now() };
+    if (d.on) S.typing[d.conv][d.userId] = { name: d.name, avatar: d.avatar, color: d.color, ts: Date.now() };
     else delete S.typing[d.conv][d.userId];
     renderTyping();
     clearTimeout(S.typing._t);
@@ -1835,6 +1850,7 @@ function openConv(conv) {
     api('/api/group/members?id=' + c.id).then(function (r) { S.gcache[c.id] = r.members; }).catch(function () {});
   }
   if (S.info) renderInfo();
+  renderTyping();
 }
 function closeConv() {
   S.cur = null;
@@ -2021,11 +2037,20 @@ function msgAct(act, id) {
 }
 function renderTyping() {
   var t = S.typing[S.cur] || {};
-  var names = Object.keys(t).filter(function (k) { return Date.now() - t[k].ts < 3500; }).map(function (k) { return t[k].name; });
+  var cut = Date.now() - 3500;
+  var list = Object.keys(t).filter(function (k) { return t[k].ts >= cut; })
+    .map(function (k) { return t[k]; });
   var bar = $('#typBar');
-  if (!names.length) { bar.classList.add('hidden'); bar.textContent = ''; return; }
+  if (!list.length) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+  // 取第一个打字者的头像；多人时名字合并（≤2 全列，超过 2 人显示「A、B 等」）
+  var first = list[0];
+  var av = avOf(first.name, first.avatar, first.color, 's');
+  var names = list.map(function (x) { return x.name; });
+  var label = names.length <= 2 ? names.join('、') : (names.slice(0, 2).join('、') + ' 等');
+  bar.innerHTML = '<span class="tav">' + av + '</span>'
+    + '<div class="tbub"><span class="tdots"><i></i><i></i><i></i></span>'
+    + '<span class="ttxt">' + esc(label) + ' 正在输入…</span></div>';
   bar.classList.remove('hidden');
-  bar.textContent = names.join('、') + ' 正在输入…';
 }
 
 // 待发送附件队列：粘贴/选择后只是预览，点「发送」才真正上传
