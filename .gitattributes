@@ -1,0 +1,18 @@
+# 统一换行符：仓库内一律 LF，检出到工作区也保持 LF
+# 目的：避免 Windows 端编辑工具（Python open / 编辑器）把 \n 写成 \r\n，
+#      导致 diff 变成整文件重写（曾发生：3000+ 行全量替换）。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.pdf binary
