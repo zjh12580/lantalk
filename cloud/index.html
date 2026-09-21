@@ -211,7 +211,8 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .ops button:hover{color:var(--brand)}
 .rev{font-size:12px;color:var(--tx3);font-style:italic;padding:9px 14px;background:transparent;border:1px dashed var(--bd);border-radius:14px;display:inline-block}
 /* 输入中：消息流底部的头像 + 气泡（三个跳动圆点） */
-.typ{display:flex;align-items:center;gap:8px;padding:4px 16px 10px;background:var(--bg)}
+.compwrap{position:relative;flex:0 0 auto}
+.typ{position:absolute;left:0;right:0;bottom:100%;display:flex;align-items:center;gap:8px;padding:4px 16px 10px;pointer-events:none}
 .typ .tav .av{width:28px;height:28px;font-size:14px;border-radius:8px}
 .tbub{display:inline-flex;align-items:center;gap:8px;background:var(--bb);color:var(--bbtx);padding:9px 14px;border-radius:4px 14px 14px 14px}
 .tdots{display:inline-flex;gap:4px;align-items:center}
@@ -430,21 +431,25 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .m.cardmsg{display:block}
 .m.cardmsg .mav{display:none}
 .m.cardmsg .mb{max-width:440px;margin:2px auto 0}
-.card{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;overflow:hidden;box-shadow:var(--sd)}
-.card .chd{padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--bd)}
-.card .clogo{width:30px;height:30px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex:0 0 auto}
-.card .ctitle{font-weight:600;font-size:14px;line-height:1.25}
+.card{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;overflow:hidden;box-shadow:var(--sd);width:min(320px,80vw)}
+.card .chd{padding:8px 12px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--bd)}
+.card .clogo{width:26px;height:26px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:0 0 auto}
+.card .ctitle{font-weight:600;font-size:13px;line-height:1.25}
 .card .csub{font-size:11px;color:var(--tx3);margin-top:1px}
-.card .cbody{padding:2px 14px 10px}
-.card .crow{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed var(--bd)}
-.card .crow:last-child{border-bottom:none}
-.card .ck{font-size:12px;color:var(--tx2)}
-.card .cv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.card .cbody{padding:3px 12px 8px;display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.card .crow{display:block;padding:6px 0 2px;border-bottom:none}
+.card .ck{display:block;font-size:11px;color:var(--tx3)}
+.card .cv{display:block;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:1px}
+.card .cbody.wide{display:block}
+.card .cbody.wide .crow{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--bd)}
+.card .cbody.wide .crow:last-child{border-bottom:none}
+.card .cbody.wide .ck{display:inline;font-size:12px;color:var(--tx2);font-weight:600}
+.card .cbody.wide .cv{display:inline;font-size:12px;font-weight:400;margin-top:0}
 .card .cv.up{color:#e34d4d}
 .card .cv.down{color:#2ba36b}
 .card .cv.flat{color:var(--tx2)}
-.card .cfoot{font-size:11px;color:var(--tx3);padding:8px 14px;border-top:1px solid var(--bd);text-align:center;white-space:pre-wrap;line-height:1.5}
-.card.err .cbody{padding:14px;text-align:center;color:var(--danger)}
+.card .cfoot{font-size:10px;color:var(--tx3);padding:6px 12px;border-top:1px solid var(--bd);text-align:center;white-space:pre-wrap;line-height:1.4}
+.card.err .cbody{padding:12px;text-align:center;color:var(--danger);display:block}
 /* 头像/按钮悬停过渡 */
 .mav{transition:box-shadow .15s ease,transform .15s ease}
 .mav:hover{transform:scale(1.06)}
@@ -555,6 +560,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
       <div class="ann hidden" id="annBar"></div>
       <div class="livebar hidden" id="liveBar"></div>
       <div class="msgs" id="mList"></div>
+      <div class="compwrap">
       <div class="typ hidden" id="typBar"></div>
       <div class="rbar hidden" id="rBar"><span id="rText"></span><button class="ib" id="rCancel">✕</button></div>
       <div class="comp">
@@ -572,6 +578,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
           <textarea class="inp" id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行..."></textarea>
           <button class="sendbtn" id="bSend" title="发送"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg></button>
         </div>
+      </div>
       </div>
     </div>
   </main>
@@ -666,7 +673,7 @@ var S = {
   gameLeaveT: null,      // 对手离开的 3 秒倒计时定时器
   gameLeaveN: 0,         // 倒计时剩余秒数
 };
-var BUILD = { sha: '27dae2c', date: '2026-09-21', subject: 'chore(version): 版本标识更新' }; // LT_BUILD
+var BUILD = { sha: '264e58c', date: '2026-09-21', subject: 'chore(version): 版本标识更新' }; // LT_BUILD
 // 版本标识：以 git 提交号为版本（由 scripts/stamp-version.mjs 写入 BUILD）
 function verTag() { return BUILD.sha + ' · ' + BUILD.date; }
 // 机器人「小美」：气氛组，@她会接话，也会不定时主动冒泡
@@ -2342,11 +2349,11 @@ function msgAct(act, id) {
 }
 
 // ---------- 预置指令（输入 # 唤起，效果参考 Telegram 指令菜单） ----------
-// 列表项：#btc / #eth 直接拉取行情；#股票代码 需要补 6 位代码；#help 列出全部
+// 列表项：#btc / #eth 直接拉取行情；#股票 支持代码或名称；#help 列出全部
 var CMDS = [
   { cmd: '#btc', sym: 'bitcoin', label: '比特币行情', desc: '实时价格 / 涨跌幅 / 成交量', arg: false },
   { cmd: '#eth', sym: 'ethereum', label: '以太坊行情', desc: '实时价格 / 涨跌幅 / 成交量', arg: false },
-  { cmd: '#股票代码', sym: '', label: 'A股行情', desc: '# + 6 位代码，例如 #600519', arg: true },
+  { cmd: '#股票', sym: '', label: '股票行情', desc: '# + 代码或名称：#600519 / #茅台 / #腾讯', arg: true },
   { cmd: '#help', sym: '', label: '指令帮助', desc: '列出全部可用预置指令', arg: false }
 ];
 var DEFAULT_PH = '输入消息，Enter 发送，Shift+Enter 换行...';
@@ -2365,11 +2372,12 @@ function fmtVol(n) {
 function fmtCardTime(iso) {
   var d = new Date(iso); if (isNaN(d)) return '-';
   var p = function (x) { return (x < 10 ? '0' : '') + x; };
-  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 function fmtCardTime2(s) {
-  s = String(s); if (s.length < 14) return s;
-  return s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) + ' ' + s.slice(8, 10) + ':' + s.slice(10, 12) + ':' + s.slice(12, 14);
+  var m = String(s).match(/(\d{4})[\/\-]?(\d{2})[\/\-]?(\d{2})[ T]?(\d{2}):?(\d{2})?/);
+  if (m) return m[2] + '-' + m[3] + ' ' + m[4] + ':' + (m[5] || '00');
+  return String(s);
 }
 function cardHtml(json) {
   var c;
@@ -2382,7 +2390,7 @@ function cardHtml(json) {
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
     (c.sub ? '<div class="csub">' + esc(c.sub) + '</div>' : '') + '</div></div>' +
-    '<div class="cbody">' + rows + '</div>' +
+    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + rows + '</div>' +
     (c.foot ? '<div class="cfoot">' + esc(c.foot) + '</div>' : '') + '</div>';
 }
 function parseHash(text) {
@@ -2399,10 +2407,55 @@ function parseHash(text) {
     if (p === '60' || p === '68' || p === '90' || s[0] === '9') sec = 'sh' + s;
     else if (p === '00' || p === '30' || p === '20' || p === '08' || p === '03') sec = 'sz' + s;
     else if (s[0] === '4' || s[0] === '8') sec = 'bj' + s;
-    else return { kind: 'unknown' };
   }
   if (sec) return { kind: 'stock', sec: sec, code: s };
-  return { kind: 'unknown' };
+  return { kind: 'stockq', query: s };
+}
+// 名称/拼音 → 证券代码：腾讯 smartbox 模糊搜索（返回 \uXXXX 转义，纯 ASCII 免编码问题）
+function jsonpSmart(q) {
+  return new Promise(function (resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://smartbox.gtimg.cn/s3/?v=2&q=' + encodeURIComponent(q) + '&t=all';
+    s.charset = 'utf-8';
+    var done = false;
+    var timer = setTimeout(function () { if (!done) { done = true; cleanup(); reject(new Error('搜索超时')); } }, 8000);
+    function cleanup() { clearTimeout(timer); if (s.parentNode) s.parentNode.removeChild(s); try { delete window.v_hint; } catch (e) {} }
+    s.onload = function () {
+      if (done) return; done = true;
+      var raw = window.v_hint; cleanup();
+      if (!raw) return reject(new Error('未找到匹配的股票'));
+      resolve(raw);
+    };
+    s.onerror = function () { if (done) return; done = true; cleanup(); reject(new Error('网络错误')); };
+    document.body.appendChild(s);
+  });
+}
+function resolveStock(q) {
+  var sec = null;
+  if (/^(sh|sz|bj)\d{6}$/i.test(q)) return Promise.resolve(q.toLowerCase());
+  if (/^\d{6}$/.test(q)) {
+    var p = q.slice(0, 2);
+    if (p === '60' || p === '68' || p === '90' || q[0] === '9') sec = 'sh' + q;
+    else if (p === '00' || p === '30' || p === '20' || p === '08' || p === '03') sec = 'sz' + q;
+    else if (q[0] === '4' || q[0] === '8') sec = 'bj' + q;
+    if (sec) return Promise.resolve(sec);
+  }
+  return jsonpSmart(q).then(function (raw) {
+    var inner = String(raw).replace(/^[\s\S]*?"|"[^"]*$/g, '');
+    var items = inner.split('^').map(function (e) {
+      var f = e.split('~');
+      return { m: (f[0] || '').toLowerCase(), code: f[1] || '', name: f[2] || '', type: f[4] || '' };
+    }).filter(function (it) {
+      return ['sh', 'sz', 'bj', 'hk', 'us'].indexOf(it.m) >= 0 && it.code && it.name;
+    });
+    if (!items.length) throw new Error('未找到「' + q + '」');
+    var pick = items.filter(function (it) { return it.name === q; })[0] ||
+      items.filter(function (it) { return it.name.indexOf(q) >= 0 && it.type.indexOf('GP') === 0; })[0] ||
+      items.filter(function (it) { return it.name.indexOf(q) >= 0; })[0] || items[0];
+    if (pick.m === 'hk') return 'hk' + pick.code;
+    if (pick.m === 'us') return 'us' + pick.code.replace(/\..*$/, '').toUpperCase();
+    return pick.m + pick.code;
+  });
 }
 function fetchCrypto(sym) {
   var mk = function (cur) { return 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=' + cur + '&ids=' + sym; };
@@ -2429,6 +2482,7 @@ function jsonpTencent(sec) {
   return new Promise(function (resolve, reject) {
     var key = 'v_' + sec, s = document.createElement('script');
     s.src = 'https://qt.gtimg.cn/q=' + sec;
+    s.charset = 'gbk';
     var done = false;
     var timer = setTimeout(function () { if (!done) { done = true; cleanup(); reject(new Error('查询超时')); } }, 8000);
     function cleanup() { clearTimeout(timer); if (s.parentNode) s.parentNode.removeChild(s); try { delete window[key]; } catch (e) {} }
@@ -2444,8 +2498,9 @@ function jsonpTencent(sec) {
 }
 function gbk(str) {
   if (!str) return '';
+  for (var i = 0; i < str.length; i++) { if (str.charCodeAt(i) > 0xff) return str; }
   var bytes = [];
-  for (var i = 0; i < str.length; i++) bytes.push(str.charCodeAt(i) & 0xff);
+  for (var j = 0; j < str.length; j++) bytes.push(str.charCodeAt(j) & 0xff);
   try { return new TextDecoder('gbk').decode(new Uint8Array(bytes)); } catch (e) { return str; }
 }
 function fetchStock(sec, code) {
@@ -2453,7 +2508,9 @@ function fetchStock(sec, code) {
     var a = String(raw).split('~');
     if (a.length < 34) throw new Error('返回数据异常');
     var name = gbk(a[1]);
-    var price = a[3], chg = a[31], pct = a[32], volHands = parseFloat(a[6]) || 0;
+    var price = a[3], pct = a[32], volHands = parseFloat(a[6]) || 0;
+    var mkc = String(sec).slice(0, 2).toLowerCase();
+    var volTxt = (mkc === 'hk' || mkc === 'us') ? fmtVol(volHands) + ' 股' : fmtVol(volHands * 100) + ' 股';
     var pctNum = parseFloat(pct);
     var cls = pctNum > 0.0001 ? 'up' : (pctNum < -0.0001 ? 'down' : 'flat');
     var sign = pctNum > 0 ? '+' : '';
@@ -2461,14 +2518,14 @@ function fetchStock(sec, code) {
       { k: '时间', v: fmtCardTime2(a[30]) },
       { k: '价格', v: '¥' + fmtNum(price), cls: cls },
       { k: '当日涨跌幅', v: sign + fmtNum(pctNum) + '%', cls: cls },
-      { k: '成交量', v: (volHands / 1e4).toFixed(2) + ' 万手' }
+      { k: '成交量', v: volTxt }
     ];
     return { logo: (name || code || '#').slice(0, 1), title: (name || code) + ' 行情', sub: (a[2] || code) + ' · 数据腾讯财经', rows: rows, foot: '行情仅供参考，并非投资建议' };
   });
 }
 function helpCard() {
   return {
-    logo: '?', title: '预置指令帮助', sub: '输入 # 唤起菜单',
+    logo: '?', title: '预置指令帮助', sub: '输入 # 唤起菜单', wide: true,
     rows: CMDS.map(function (c) { return { k: c.cmd, v: c.label }; }),
     foot: CMDS.map(function (c) { return c.cmd + '  ' + c.label + '\n' + '　　' + c.desc; }).join('\n')
   };
@@ -2481,7 +2538,10 @@ function handleHashCmd(text) {
   if (p.kind === 'help') { postCard(helpCard()); return; }
   if (p.kind === 'unknown') { toast('未识别的指令：' + esc(text) + '（输入 # 查看可用指令）', 'err'); return; }
   toast('查询中…');
-  var prom = p.kind === 'crypto' ? fetchCrypto(p.sym) : fetchStock(p.sec, p.code);
+  var prom;
+  if (p.kind === 'crypto') prom = fetchCrypto(p.sym);
+  else if (p.kind === 'stock') prom = fetchStock(p.sec, p.code);
+  else prom = resolveStock(p.query).then(function (sec) { return fetchStock(sec, p.query); });
   prom.then(function (card) { postCard(card); })
     .catch(function (e) { postCard({ err: (e && e.message) || '查询失败' }); });
 }
@@ -2520,7 +2580,7 @@ function runCmdItem(cmd) {
   var el = $('#input');
   closePops();
   if (c && c.arg) {
-    el.value = '#'; el.placeholder = '输入股票代码后回车查询，例如 600519';
+    el.value = '#'; el.placeholder = '输入股票代码或名称后回车，例如 600519 / 茅台 / 腾讯';
     el.focus(); autoH(); S.cmdSuppress = Date.now() + 800; return;
   }
   el.value = cmd; el.placeholder = DEFAULT_PH; doSend(); S.cmdSuppress = Date.now() + 800;

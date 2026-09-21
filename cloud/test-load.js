@@ -255,6 +255,24 @@ function makeStub() {
         }
         return Promise.reject(new Error('no network in test'));
       };
+      // 拦截 JSONP script 注入：smartbox 名称解析 / 腾讯行情（jsdom 不加载外部脚本）
+      const bodyAppend = win.HTMLBodyElement.prototype.appendChild;
+      win.HTMLBodyElement.prototype.appendChild = function (el) {
+        if (el && el.tagName === 'SCRIPT' && el.src) {
+          const url = String(el.src);
+          setTimeout(() => {
+            if (url.indexOf('smartbox.gtimg.cn') >= 0) {
+              win.v_hint = 'sh~600519~\u8d35\u5dde\u8305\u53f0~gzmt~GP-A^hk~00700~\u817e\u8baf\u63a7\u80a1~tencent~GP';
+            } else if (url.indexOf('qt.gtimg.cn') >= 0) {
+              const sec = (url.split('q=')[1] || '').split('&')[0];
+              win['v_' + sec] = '1~\u8d35\u5dde\u8305\u53f0~600519~1252.57~1257.12~1259.00~25017~11200~13817~1252.57~1~1252.56~15~1252.55~110~1252.50~24~1252.45~1~1252.86~57~1252.97~1~1253.00~3~1253.12~1~1253.13~5~~20260921154707~-4.55~-0.36~1259.95~1250.80~1252.57/25017/3135910045~25017~313591~0.20~19.23~~1259.95~1250.80~0.73~15658.15';
+            }
+            if (typeof el.onload === 'function') el.onload();
+          }, 30);
+          return el;
+        }
+        return bodyAppend.call(this, el);
+      };
       win.Notification = undefined;
     },
   });
@@ -1274,20 +1292,29 @@ function makeStub() {
   log(!!card && card.textContent.indexOf('Bitcoin') >= 0 && card.textContent.indexOf('价格') >= 0 && card.textContent.indexOf('当日涨跌幅') >= 0 && card.textContent.indexOf('成交量') >= 0,
     '卡片含 时间/价格/涨跌幅/成交量', card ? card.textContent.replace(/\s+/g, ' ').slice(0, 150) : 'none');
   log(DATA.messages.some((m) => m.type === 'card'), '卡片作为 card 类型消息写入云端');
-  // #股票代码 菜单项：点击后输入框填 # 并提示输入代码
+  // #股票 菜单项：点击后输入框填 # 并提示输入代码或名称
   cmdInput.value = ''; cmdInput.dispatchEvent(new w.Event('input', { bubbles: true }));
   D.querySelector('#bCmd').click();
   await sleep(140);
-  const stockItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#股票代码')[0];
-  log(!!stockItem, '菜单含 #股票代码 指令项');
+  const stockItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#股票')[0];
+  log(!!stockItem, '菜单含 #股票 指令项');
   stockItem.click();
   await sleep(140);
-  log(cmdInput.value === '#' && cmdInput.placeholder.indexOf('股票代码') >= 0, '点 #股票代码 后输入框填 # 并提示输入代码', cmdInput.placeholder);
+  log(cmdInput.value === '#' && cmdInput.placeholder.indexOf('名称') >= 0, '点 #股票 后输入框填 # 并提示输入代码或名称', cmdInput.placeholder);
   // 输入完整代码发送：验证 # 指令被拦截走行情逻辑（不按普通消息发）
   cmdInput.value = '#600519';
   D.querySelector('#bSend').click();
   await sleep(300);
   log(cmdInput.value === '', '发送 #600519 被 # 指令逻辑拦截（输入框已清空，未走普通文本发送）');
+  // 名称查询：#茅台 走 smartbox 名称解析（桩：window.v_hint）
+  const cardsB4Name = D.querySelectorAll('#mList .cardmsg').length;
+  cmdInput.value = '#茅台';
+  D.querySelector('#bSend').click();
+  await sleep(300);
+  log(D.querySelectorAll('#mList .cardmsg').length === cardsB4Name + 1, '#茅台（名称）查询产出行情卡片');
+  const nameCard = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
+  log(!!nameCard && nameCard.textContent.indexOf('贵州茅台') >= 0, '名称解析命中 贵州茅台 并展示名称', nameCard ? nameCard.textContent.slice(0, 80) : 'none');
+  cmdInput.value = '';;
 
   D.querySelector('#meBox').click();
   await sleep(400);
