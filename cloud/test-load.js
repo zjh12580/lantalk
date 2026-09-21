@@ -772,8 +772,7 @@ function makeStub() {
     if (hallConv) hallConv.click();
     await sleep(800);
 
-    // 1) 工具栏按钮已是「游戏」图标；#bMore（更早消息）由 dev 分支恢复，与 #bGame 共存
-    log(D.querySelector('#bMore') !== null, '「更早消息」按钮保留在工具栏');
+    // 1) 工具栏含「游戏」图标按钮（#bMore 更早消息已按需求移除，见文件末尾工具栏断言）
     const bGame = D.querySelector('#bGame');
     log(!!bGame, '工具栏游戏图标按钮共存');
 
@@ -1694,6 +1693,84 @@ function makeStub() {
     // 7) 多模型回退链
     log(/LLM_RETRY/.test(code) && /S\.llmQueue\.slice\(\)/.test(code),
       'botLLM 有候选模型回退链（模型 × 带/不带 temperature）');
+  }
+
+  // ===== 本轮：工具栏精简（去掉 bAt / bMore）=====
+  log(D.querySelector('#bAt') === null, '工具栏「@某人」按钮已移除');
+  log(D.querySelector('#bMore') === null, '工具栏「更早消息」按钮已移除');
+  log(!!D.querySelector('#bGame') && !!D.querySelector('#bCmd') && !!D.querySelector('#bEmo') && !!D.querySelector('#bImg') && !!D.querySelector('#bFile'),
+    '其余工具栏按钮仍在（游戏 / # / 表情 / 图片 / 文件）');
+
+  // ===== 本轮：输入 @ 弹群成员列表，Enter = 确认艾特（不是发送）=====
+  {
+    const hallConv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+    if (hallConv) hallConv.click();
+    await sleep(700);
+    const inp = D.querySelector('#input');
+    const mpop = D.querySelector('#mpop');
+    const msgCountBefore = D.querySelectorAll('#mList .m').length;
+
+    // 清空后输入 @ → 弹出成员列表
+    inp.value = '@';
+    inp.selectionStart = inp.selectionEnd = 1;
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(120);
+    log(!mpop.classList.contains('hidden'), '输入 @ 弹出成员列表');
+    const items = mpop.querySelectorAll('.mitem');
+    log(items.length >= 2, '@ 列表里列出了群成员', items.length + ' 人');
+    log(Array.prototype.some.call(items, (it) => /我$/.test(it.textContent.trim()) || it.textContent.indexOf('我') >= 0),
+      '列表里能认出自己（带「我」标记）');
+
+    // ↑↓ 能切换高亮
+    const firstOn = mpop.querySelectorAll('.mitem.on')[0];
+    inp.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await sleep(60);
+    const secondOn = mpop.querySelectorAll('.mitem.on')[0];
+    log(!!firstOn && !!secondOn && firstOn !== secondOn, '↓ 键切换成员高亮');
+
+    // Enter = 确认艾特（关键：绝不能发送消息）
+    const targetName = secondOn.querySelector('span').textContent.trim();
+    inp.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(160);
+    log(inp.value === '@' + targetName + ' ', 'Enter 把选中成员写进输入框（@昵称+空格）', JSON.stringify(inp.value));
+    log(mpop.classList.contains('hidden'), '确认后成员列表自动收起');
+    log(D.querySelectorAll('#mList .m').length === msgCountBefore, 'Enter 确认艾特时没有发送消息（消息数不变）');
+
+    // 补几个字再发送 → 正常发出且带 mentions
+    inp.value = '@' + targetName + ' 你好呀';
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+    log(D.querySelector('#mpop').classList.contains('hidden'), '昵称后已有空格，不再重复弹成员列表');
+    D.querySelector('#bSend').click();
+    await sleep(400);
+    const atMsgs = DATA.messages.filter((m) => m.conv === 'g:hall' && /你好呀$/.test(m.text || '') && (m.mentions || []).length);
+    log(atMsgs.length >= 1, '发送后 @提及被解析成 mentions 落库', atMsgs.length ? JSON.stringify(atMsgs[atMsgs.length - 1].mentions) : 'none');
+
+    // 私聊里输入 @ 不应弹成员列表
+    const priv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
+    if (priv) {
+      priv.click();
+      await sleep(500);
+      const inp2 = D.querySelector('#input');
+      D.querySelector('#mpop').classList.add('hidden');
+      inp2.value = '@';
+      inp2.selectionStart = inp2.selectionEnd = 1;
+      inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
+      await sleep(120);
+      log(D.querySelector('#mpop').classList.contains('hidden'), '私聊里输入 @ 不弹成员列表');
+      inp2.value = ''; inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
+    }
+  }
+
+  // ===== 本轮：对局浮层左右分栏（信息在左、棋盘在右）=====
+  {
+    const body = D.querySelector('#groom .gr-body');
+    if (body) {
+      log(!!D.querySelector('#groom .gr-side'), '对局浮层含左侧信息栏 .gr-side');
+      log(!!D.querySelector('#groom .gr-main'), '对局浮层含右侧棋盘区 .gr-main');
+      const hint = D.querySelector('#groom #grHint');
+      if (hint) log(hint.classList.contains('gr-status'), '轮次/提示文案放在左侧 .gr-status 里');
+    }
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
