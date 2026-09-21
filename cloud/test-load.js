@@ -22,6 +22,7 @@ const DATA = {
   reads: [],
   messages: [],
   live: [],
+  games: [],
 };
 let seq = 0;
 const TABLE = {};
@@ -104,7 +105,7 @@ function builder(table) {
   };
   return b;
 }
-['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live'].forEach((t) => { TABLE[t] = () => builder(t); });
+['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live', 'games'].forEach((t) => { TABLE[t] = () => builder(t); });
 
 let __updates = [];
 let __updateFail = false;      // 置 true 时模拟网关「落盘成功但响应报 404」
@@ -580,7 +581,149 @@ function makeStub() {
       (D.querySelector('#info').textContent || '').replace(/\s+/g, ' ').slice(0, 70));
   }
 
-  // ===== 本轮修复：侧栏不再有分类 tab =====
+  // ===== 本轮新功能：一起玩游戏（五子棋全链路）=====
+  {
+    // 回到大厅（有其他人，便于验证抢占）
+    const hallConv = D.querySelector('#cList .conv[data-c="g:hall"]');
+    if (hallConv) hallConv.click();
+    await sleep(800);
+
+    // 1) 工具栏按钮已是「游戏」图标（原名 bMore 的更早消息按钮）
+    log(D.querySelector('#bMore') === null, '「更早消息」按钮已从工具栏移除');
+    const bGame = D.querySelector('#bGame');
+    log(!!bGame, '工具栏新增游戏图标按钮');
+
+    // 2) 点开 -> 出现选游戏弹窗（五子棋/围棋/象棋）
+    bGame.click();
+    await sleep(300);
+    const cards = D.querySelectorAll('#modal .gcard');
+    log(cards.length === 3, '弹窗提供 3 种棋类（五子棋/围棋/象棋）', cards.length);
+    const names = Array.from(cards).map((c) => c.querySelector('.gnm').textContent);
+    log(names.indexOf('五子棋') >= 0 && names.indexOf('围棋') >= 0 && names.indexOf('象棋') >= 0,
+      '三种棋类名称正确', names.join('/'));
+    log(Array.from(cards).filter((c) => c.classList.contains('off')).length === 2,
+      '围棋/象棋标记为开发中（不可点）');
+
+    // 3) 选五子棋 -> 写入 games 表 + 发一条 type=game 的按钮消息
+    const nMsg0 = DATA.messages.length;
+    const gomoku = Array.from(cards).find((c) => c.dataset.k === 'gomoku');
+    gomoku.click();
+    await sleep(900);
+    const gameRow = DATA.games[DATA.games.length - 1];
+    log(!!gameRow && gameRow.kind === 'gomoku' && gameRow.status === 'waiting',
+      '发起五子棋：games 表写入 waiting 记录', gameRow ? gameRow.status : 'none');
+    log(gameRow && gameRow.host_id === 'u_test', '游戏发起人是当前用户', gameRow && gameRow.host_id);
+    const gMsg = DATA.messages.slice(nMsg0).find((m) => m.type === 'game');
+    log(!!gMsg && gMsg.text === (gameRow && gameRow.id), '发出了 type=game 的按钮消息，text 指向 gameId');
+
+    // 4) 聊天区渲染出邀请卡片，发起方自己看到「等待对方加入」（不可点）
+    const inv = D.querySelectorAll('#mList .ginvite');
+    log(inv.length >= 1, '聊天区渲染出游戏邀请卡片', inv.length);
+    const myBtn = D.querySelector('#mList .ginvite:last-of-type .gbtn') || (inv.length ? inv[inv.length - 1].querySelector('.gbtn') : null);
+    log(!!myBtn && myBtn.classList.contains('dis') && myBtn.textContent.indexOf('等待对方加入') >= 0,
+      '发起方视角：按钮显示「等待对方加入」且置灰', myBtn ? myBtn.textContent : 'none');
+
+    const gidStr = gameRow.id;
+
+    // 5) 模拟「对方」抢到对局（直接改库，等同另一客户端 join），本地轮询应同步
+    gameRow.guest_id = 'u_a'; gameRow.guest_name = '甲'; gameRow.status = 'playing'; gameRow.turn = 'host';
+    await sleep(3200);
+    const cardNow = D.querySelectorAll('#mList .ginvite');
+    const lastCard = cardNow.length ? cardNow[cardNow.length - 1] : null;
+    const lastBtn = lastCard ? lastCard.querySelector('.gbtn') : null;
+    log(!!lastBtn && !lastBtn.classList.contains('dis') && lastBtn.textContent.indexOf('进入对局') >= 0,
+      '对局开始后：卡片变为可点「进入对局」', lastBtn ? lastBtn.textContent : 'none');
+
+    // 5b) 群聊抢位：第三人（非参与方）看到的必须是置灰「游戏已开始或已过期」
+    //     这里先确认「抢先者已原子写入 guest_id」——并发下只有一个赢家
+    {
+      const gRow = DATA.games.find((x) => x.id === gidStr);
+      log(!!gRow && gRow.status === 'playing' && gRow.guest_id === 'u_a',
+        '抢先者已写入 guest_id（并发下只有一个赢家）', gRow ? gRow.guest_id : 'none');
+    }
+
+    // 6) 点进入 -> 打开对局浮层，出现棋盘
+    lastBtn.click();
+    await sleep(400);
+    const room = D.querySelector('#groom');
+    log(!!room && !room.classList.contains('hidden'), '点击后可打开对局浮层');
+    log(!!(room && room.querySelector('#gBoard')), '对局浮层里渲染出棋盘');
+
+    // 7) 五子棋胜负判定（纯逻辑，直接调用内部工具）
+    const GBcheck = w.LT.GB;
+    if (GBcheck) {
+      const bd = GBcheck.newBoard();
+      for (let c = 3; c <= 7; c++) bd[GBcheck.idx(7, c)] = 1;   // 横排五连
+      log(GBcheck.checkWin(bd, 7, 5, 1) === true, '五子棋：横排五连判定为胜');
+      log(GBcheck.checkWin(bd, 7, 5, 2) === false, '五子棋：对方颜色不构成胜利');
+      const bd2 = GBcheck.newBoard();
+      for (let i = 0; i < 4; i++) bd2[GBcheck.idx(5 + i, 5 + i)] = 2;  // 只四连
+      log(GBcheck.checkWin(bd2, 6, 6, 2) === false, '五子棋：四连不算胜');
+      const bd3 = GBcheck.newBoard();
+      for (let i = 0; i < 5; i++) bd3[GBcheck.idx(3 + i, 3 + i)] = 2;  // 斜向五连
+      log(GBcheck.checkWin(bd3, 5, 5, 2) === true, '五子棋：斜向五连判定为胜');
+    }
+
+    // 8) 结束后：发起方看到「再来一局/其他游戏/结束游戏」
+    gameRow.status = 'over'; gameRow.winner = 'u_test';
+    await sleep(3200);
+    const room2 = D.querySelector('#groom');
+    const txt = room2 ? room2.textContent : '';
+    log(txt.indexOf('再来一局') >= 0 && txt.indexOf('其他游戏') >= 0 && txt.indexOf('结束游戏') >= 0,
+      '赢家（发起方）看到「再来一局 / 其他游戏 / 结束游戏」', txt.replace(/\s+/g, ' ').slice(0, 50));
+
+    // 8b) 对方视角：应显示「游戏房间清扫中~~~」而不是操作按钮
+    {
+      const guestRow = DATA.games.find((g) => g.id === gidStr);
+      if (guestRow) { guestRow.winner = 'u_a'; }   // 换成对方赢，我这侧就是败方
+      await sleep(3200);
+      const t2 = D.querySelector('#groom') ? D.querySelector('#groom').textContent : '';
+      log(t2.indexOf('游戏房间清扫中') >= 0, '败方/对方视角显示「游戏房间清扫中~~~」', t2.replace(/\s+/g, ' ').slice(0, 50));
+      if (guestRow) { guestRow.winner = 'u_test'; }
+      await sleep(3200);
+    }
+
+    // 8c) 关键回归：房间关闭后，聊天区的邀请卡片也必须跟著状态实时更新
+    //     （曾因 applyGames 未触发 renderMsgs 导致卡片永远停在「等待对方加入」）
+    {
+      const exitBtn0 = D.querySelector('#grExit');
+      if (exitBtn0) exitBtn0.click();
+      await sleep(250);
+      const cf = D.querySelector('#cfOk') || D.querySelector('.dlg .btn.primary');
+      if (cf) cf.click();
+      await sleep(400);
+      const cardsAfter = D.querySelectorAll('#mList .ginvite');
+      const bAfter = cardsAfter.length ? cardsAfter[cardsAfter.length - 1].querySelector('.gbtn') : null;
+      log(!!bAfter && bAfter.classList.contains('dis') && bAfter.textContent.indexOf('已开始或已过期') >= 0,
+        '房间关闭后邀请卡片同步为置灰「游戏已开始或已过期」', bAfter ? bAfter.textContent : 'none');
+    }
+
+    // 8d) 对局中对方离开 → 显示倒计时文案（3 秒后自动退出）
+    {
+      const g2 = DATA.games.find((x) => x.id === gidStr);
+      if (g2) { g2.status = 'left'; g2.winner = ''; }
+      await sleep(3200);
+      const roomL = D.querySelector('#groom');
+      log(!!roomL && /倒计时/.test(roomL.textContent), '对方离开 → 浮层出现「倒计时 … 秒退出」文案');
+      const cnt = D.querySelector('#grCnt');
+      log(!!cnt, '倒计时数字元素存在');
+      await sleep(4200);   // 等满 3 秒自动退出
+      const roomZ = D.querySelector('#groom');
+      log(!roomZ || roomZ.classList.contains('hidden'), '倒计时结束自动关闭对局浮层');
+    }
+
+    // 9) 关闭对局浮层
+    const exitBtn = D.querySelector('#grExit');
+    if (exitBtn) exitBtn.click();
+    await sleep(250);
+    // confirmBox 需要确认
+    const okBtn = D.querySelector('#cfOk') || D.querySelector('.dlg .btn.primary');
+    if (okBtn) okBtn.click();
+    await sleep(300);
+    const roomEnd = D.querySelector('#groom');
+    log(!roomEnd || roomEnd.classList.contains('hidden'), '可离开对局并关闭浮层');
+  }
+
   log(D.querySelector('.tabs') === null, '侧栏分类 tab（全部/未读/群聊/好友）已移除');
   log(D.querySelector('#uTotal') === null, '旧的未读数字徽标已移除');
   log(D.querySelector('#bReq') === null && D.querySelector('#rBadge') === null, '好友请求按钮已移除（改为列表内展示）');

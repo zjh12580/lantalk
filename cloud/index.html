@@ -289,6 +289,42 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .modal h3{margin:0 0 16px;font-size:16px}
 .modal label{display:block;font-size:12px;color:var(--tx2);margin:12px 0 5px}
 .acts{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+/* ---------- 一起玩游戏 ---------- */
+.gpick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
+.gcard{background:var(--bg3);border:1px solid var(--bd);border-radius:12px;padding:14px 8px;text-align:center;cursor:pointer;transition:.15s}
+.gcard:hover{border-color:var(--brand);transform:translateY(-2px)}
+.gcard .gico{font-size:30px;line-height:1.2}
+.gcard .gnm{font-size:13px;margin-top:6px;font-weight:600}
+.gcard .gds{font-size:11px;color:var(--tx3);margin-top:2px}
+.gcard.off{opacity:.45;cursor:not-allowed}
+.gcard.off:hover{border-color:var(--bd);transform:none}
+/* 邀请卡片消息 */
+.ginvite{margin:6px 0;padding:12px 14px;border-radius:12px;background:var(--bg2);border:1px solid var(--bd);max-width:280px}
+.ginvite .git{font-size:14px;font-weight:600;margin-bottom:4px}
+.ginvite .gsub{font-size:12px;color:var(--tx3);margin-bottom:10px;line-height:1.5}
+.ginvite .gbtn{display:block;width:100%;padding:8px;border-radius:9px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--brand);color:#fff;transition:.15s}
+.ginvite .gbtn:hover{filter:brightness(1.08)}
+.ginvite .gbtn.dis{background:var(--bg3);color:var(--tx3);cursor:not-allowed;font-weight:500}
+.ginvite .gbtn.dis:hover{filter:none}
+/* 对局全屏浮层 */
+.groom{position:fixed;inset:0;background:var(--bg);z-index:120;display:flex;flex-direction:column}
+.groom .gr-top{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bd);flex-shrink:0}
+.groom .gr-title{font-size:15px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.groom .gr-tag{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--tx2);flex-shrink:0}
+.groom .gr-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px;overflow:auto}
+.groom .gr-side{display:flex;align-items:center;gap:14px;margin-bottom:12px;font-size:13px;flex-wrap:wrap;justify-content:center}
+.groom .gr-pl{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:20px;background:var(--bg2);border:1px solid var(--bd)}
+.groom .gr-pl.on{border-color:var(--brand);box-shadow:0 0 0 1px var(--brand)}
+.groom .gr-pl .dot{width:7px;height:7px;border-radius:50%;background:var(--tx3)}
+.groom .gr-pl.on .dot{background:var(--brand);animation:livepulse 1.4s infinite}
+#gBoard{background:#e9be7c;border-radius:8px;box-shadow:var(--sd);touch-action:none;max-width:100%;height:auto}
+.groom .gr-foot{padding:12px 16px;border-top:1px solid var(--bd);display:flex;justify-content:center;gap:10px;flex-shrink:0}
+.groom .gr-hint{margin-top:12px;font-size:12.5px;color:var(--tx3);text-align:center;line-height:1.6}
+.gr-cnt{font-size:44px;font-weight:700;color:var(--brand);line-height:1.1}
+.gpick2{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:14px 0}
+.gpick2 button{padding:9px 16px;border-radius:10px;border:1px solid var(--bd);background:var(--bg2);color:var(--tx);font-size:13px;cursor:pointer;transition:.15s}
+.gpick2 button:hover{border-color:var(--brand);color:var(--brand)}
+.gpick2 button.pri{background:var(--brand);color:#fff;border-color:var(--brand)}
 .rlist{max-height:300px;overflow-y:auto;margin-top:8px}
 .ritem{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;cursor:pointer}
 .ritem:hover{background:var(--hover)}
@@ -481,7 +517,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
           <button class="ib" id="bImg" title="图片"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-4.5-4.5L7 21"/></svg></button>
           <button class="ib" id="bFile" title="文件"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.85 1.85 0 0 1-2.6-2.6l8.2-8.2"/></svg></button>
           <button class="ib" id="bAt" title="@某人"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg></button>
-          <button class="ib" id="bMore" title="更早消息"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
+          <button class="ib" id="bGame" title="一起玩游戏"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="12" rx="5"/><line x1="7" y1="13" x2="7" y2="13.01"/><line x1="7" y1="10.5" x2="7" y2="15.5"/><line x1="4.5" y1="13" x2="9.5" y2="13"/><circle cx="16" cy="11" r="1.1"/><circle cx="18.5" cy="14" r="1.1"/><circle cx="13.5" cy="14" r="1.1"/></svg></button>
         </div>
         <div class="pill">
           <textarea class="inp" id="input" rows="1" placeholder="输入消息，Enter 发送，Shift+Enter 换行..."></textarea>
@@ -574,6 +610,11 @@ var S = {
   live: null,            // 当前大厅直播记录（null 表示无人直播）
   liveOpen: false,       // 直播间浮层是否打开
   liveBusy: false,       // 直播操作进行中（防重复点击）
+  games: {},             // gameId -> 游戏记录（轮询同步）
+  gameOpen: null,        // 当前打开的 gameId（null 表示未在对局浮层）
+  gameBusy: false,       // 对局操作进行中（防重复落子）
+  gameLeaveT: null,      // 对手离开的 3 秒倒计时定时器
+  gameLeaveN: 0,         // 倒计时剩余秒数
 };
 // 机器人「小美」：气氛组，@她会接话，也会不定时主动冒泡
 var BOT = { id: 'bot_xiaomei', name: '小美', avatar: '👩‍🦰', color: '#e0518f' };
@@ -1637,6 +1678,7 @@ function tick() {
     q(db.from('friends').select('*')),
     q(db.from('profiles').select('*')),   // 每轮都拉（表很小）：「正在输入」状态 2.5 秒内可见
     q(db.from('live').select('*').eq('status', 'live').limit(1)),
+    q(db.from('games').select('*')),      // 每轮都拉（表很小）：游戏状态 2.5 秒内同步
   ];
   if (heavy) jobs.push(q(db.from('group_members').select('*')), q(db.from('groups').select('*')), q(db.from('reads').select('*')));
   Promise.all(jobs).then(function (r) {
@@ -1645,11 +1687,12 @@ function tick() {
     S.profiles = {}; r[2].forEach(function (p) { S.profiles[p.id] = p; });
     ensureBot();   // 小美不在真实 profiles 表里，profiles 每轮重建后都要补回，否则 light 轮询会把她洗掉
     applyLive(r[3] && r[3].length ? r[3][0] : null);
+    applyGames(r[4]);
     if (heavy) {
       S.members = {}; S.myMuted = {};
-      r[4].forEach(function (m) { (S.members[m.group_id] = S.members[m.group_id] || []).push(m.user_id); if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
-      S.groups = r[5];
-      applyReads(r[6]);
+      r[5].forEach(function (m) { (S.members[m.group_id] = S.members[m.group_id] || []).push(m.user_id); if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
+      S.groups = r[6];
+      applyReads(r[7]);
       buildConvs();
       updateOnline();
       if (S.cur) renderMsgs();
@@ -1718,6 +1761,11 @@ function onNew(m) {
 function preview(m) {
   if (!m) return '';
   if (m.revoked) return '[消息已撤回]';
+  if (m.type === 'game') {
+    var g = S.games[m.text];
+    var kd = g ? (GAME_KINDS[g.kind] || GAME_KINDS.gomoku) : GAME_KINDS.gomoku;
+    return '[游戏] ' + kd.name + '邀请';
+  }
   if (m.type === 'image') return '[图片]' + (m.text ? ' ' + m.text : '');
   if (m.type === 'file') return '[文件] ' + (m.file_name || '');
   return m.text || '';
@@ -1939,6 +1987,18 @@ function renderMsgs(scroll) {
     var day = fmtDay(m.created_at);
     if (day !== lastDay) { html += '<div class="day"><span>' + day + '</span></div>'; lastDay = day; }
     if (m.type === 'system') { html += '<div class="sys"><span>' + esc(m.text) + '</span></div>'; return; }
+    // 游戏邀请卡片：按游戏状态实时渲染（可加入 / 已开始 / 已过期 / 已结束）
+    if (m.type === 'game') {
+      var g0 = S.games[m.text];
+      var selfInv = m.sender_id === S.uid;
+      html += '<div class="m' + (selfInv ? ' self' : '') + '" data-mid="' + m.id + '">'
+        + '<div class="mav" data-u="' + esc(m.sender_id) + '">' + avOf(m.sender_name, m.sender_avatar, m.sender_color, 's') + '</div>'
+        + '<div class="mb"><div class="meta">'
+        + (S.cur.indexOf('g:') === 0 && !selfInv ? '<span class="mname">' + esc(m.sender_name) + '</span>' : '')
+        + '<span>' + fmtTime(m.created_at) + '</span>'
+        + '</div>' + gameInviteHtml(m, g0, selfInv) + '</div></div>';
+      return;
+    }
     var self = m.sender_id === S.uid;
     var inner;
     if (m.revoked) {
@@ -2314,7 +2374,7 @@ document.addEventListener('paste', function (e) {
 // ---------- 弹窗 ----------
 function openModal(html) { var m = $('#modal'); m.className = 'modal'; m.innerHTML = html; $('#mask').classList.remove('hidden'); }
 function closeModal() { $('#mask').classList.add('hidden'); }
-window.LT = { close: closeModal };
+window.LT = { close: closeModal, get GB() { return GB; }, get S() { return S; } };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
 function promptBox(title, val, ta, onOk) {
   openModal('<h3>' + esc(title) + '</h3>'
@@ -2748,7 +2808,427 @@ document.addEventListener('click', function (e) {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' || e.key === 'Esc') { closePops(); closeModal(); closeViewer(); }
 });
-$('#bMore').onclick = function () { if (S.cur) loadHistory(S.cur, (S.msgs[S.cur] || [])[0] && S.msgs[S.cur][0].id); };
+// ==================== 一起玩游戏 ====================
+// 棋种定义：五子棋（P1 完整可玩）；围棋/象棋待后续补规则引擎
+var GAME_KINDS = {
+  gomoku: { name: '五子棋', icon: '⚫', desc: '五子连线即胜', ready: true },
+  go: { name: '围棋', icon: '⚪', desc: '提子围地（开发中）', ready: false },
+  xiangqi: { name: '象棋', icon: '🩸', desc: '将死对方（开发中）', ready: false },
+};
+var GAME_TTL = 10 * 60 * 1000;      // 邀请有效期 10 分钟
+var GAME_SWEEP = 6 * 60 * 60 * 1000; // 结束后 6 小时清掉记录
+
+function gid() { return 'gm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function gameOf(id) { return S.games[id] || null; }
+// 邀请卡片是否可以点「加入」
+function gameJoinable(g, msg) {
+  if (!g) return false;
+  if (g.status !== 'waiting') return false;
+  if (Date.now() - new Date(g.created_at).getTime() > GAME_TTL) return false;
+  var hostId = g.hostId;
+  return hostId !== S.uid;          // 发起人自己不用点
+}
+// 邀请卡片渲染（三种形态：可加入 / 抢占失败 / 已结束）
+function gameInviteHtml(m, g, selfInv) {
+  var kind = (g && g.kind) || 'gomoku';
+  var kd = GAME_KINDS[kind] || GAME_KINDS.gomoku;
+  var expired = g ? (Date.now() - new Date(g.created_at).getTime() > GAME_TTL) : true;
+  var mine = g && g.hostId === S.uid;
+  var title = kd.icon + ' ' + kd.name + '邀请';
+  var sub, btn, dis;
+  if (!g) {
+    sub = '这场对局已经不存在了'; btn = '游戏已开始或已过期'; dis = true;
+  } else if (g.status === 'waiting' && !expired) {
+    if (mine) { sub = '等待对方加入…'; btn = '等待对方加入'; dis = true; }
+    else { sub = (g.hostName || '对方') + ' 邀请你一起玩' + kd.name; btn = '点击加入！'; dis = false; }
+  } else if (g.status === 'waiting' && expired) {
+    sub = '邀请已超过 10 分钟'; btn = '游戏已开始或已过期'; dis = true;
+  } else if (g.status === 'playing') {
+    if (g.guestId === S.uid || g.hostId === S.uid) { sub = '对局进行中'; btn = '进入对局'; dis = false; }
+    else { sub = '已被 ' + (g.guestName || '其他人') + ' 抢先加入'; btn = '游戏已开始或已过期'; dis = true; }
+  } else {
+    sub = '本局已结束'; btn = '游戏已开始或已过期'; dis = true;
+  }
+  return '<div class="ginvite">'
+    + '<div class="git">' + esc(title) + '</div>'
+    + '<div class="gsub">' + esc(sub) + '</div>'
+    + '<button class="gbtn' + (dis ? ' dis' : '') + '" data-g="' + esc(m.text) + '"'
+    + (dis ? ' disabled' : '') + '>' + esc(btn) + '</button></div>';
+}
+// 选游戏弹窗
+$('#bGame').onclick = function () {
+  if (!S.cur) { toast('先选一个会话吧', 'err'); return; }
+  var c = cm()[S.cur];
+  if (!c) return;
+  var cards = Object.keys(GAME_KINDS).map(function (k) {
+    var kd = GAME_KINDS[k];
+    return '<div class="gcard' + (kd.ready ? '' : ' off') + '" data-k="' + k + '">'
+      + '<div class="gico">' + kd.icon + '</div>'
+      + '<div class="gnm">' + esc(kd.name) + '</div>'
+      + '<div class="gds">' + esc(kd.desc) + '</div></div>';
+  }).join('');
+  openModal('<h3>一起玩游戏</h3>'
+    + '<p style="font-size:12px;color:var(--tx3);margin:0 0 4px">在「' + esc(c.name) + '」发起一局对弈</p>'
+    + '<div class="gpick">' + cards + '</div>'
+    + '<div class="acts"><button class="btn" onclick="LT.close()">取消</button></div>');
+  $$('#modal .gcard').forEach(function (el) {
+    el.onclick = function () {
+      var k = el.dataset.k;
+      if (!GAME_KINDS[k] || !GAME_KINDS[k].ready) { toast(GAME_KINDS[k].name + '规则还在开发中，敬请期待 🌱'); return; }
+      startGame(k);
+    };
+  });
+};
+// 发起游戏：写 games 表 + 发一条 type=game 的按钮消息
+function startGame(kind) {
+  if (S.gameBusy) return;
+  S.gameBusy = true;
+  var id = gid();
+  var kd = GAME_KINDS[kind];
+  var now = new Date().toISOString();
+  q(db.from('games').insert({
+    id: id, conv: S.cur, kind: kind,
+    host_id: S.uid, host_name: (S.me && S.me.nickname) || '',
+    guest_id: '', guest_name: '',
+    status: 'waiting', turn: 'host',
+    board: [], moves: [], winner: '',
+    restart_by: '', restart_kind: '',
+    created_at: now, updated_at: now,
+  }).select()).then(function () {
+    return q(db.from('messages').insert({
+      conv: S.cur, sender_id: S.uid,
+      sender_name: (S.me && S.me.nickname) || '', sender_avatar: (S.me && S.me.avatar) || '',
+      sender_color: (S.me && S.me.color) || '', type: 'game', text: id, mentions: [],
+    }).select());
+  }).then(function (rows) {
+    S.gameBusy = false;
+    closeModal();
+    var m = rows && rows[0];
+    if (m) { pushMsg(S.cur, m); trackRecent(m); if (m.id > S.lastId) S.lastId = m.id; }
+    S.games[id] = { id: id, conv: S.cur, kind: kind, hostId: S.uid, hostName: (S.me && S.me.nickname) || '', guestId: '', guestName: '', status: 'waiting', turn: 'host', board: [], moves: [], created_at: now };
+    renderMsgs('bottom'); buildConvs(); renderConvs();
+    toast('已发起' + kd.name + '邀请，等对方加入～');
+  }).catch(function (e) { S.gameBusy = false; toast('发起失败：' + (e.message || e), 'err'); });
+}
+// 加入对局（抢占：谁先写到 guest_id 谁进）
+function joinGame(id) {
+  var g = gameOf(id);
+  if (!g) { toast('游戏已开始或已过期', 'err'); return; }
+  if (g.hostId === S.uid) { openRoom(id); return; }
+  if (g.guestId === S.uid) { openRoom(id); return; }
+  if (S.gameBusy) return;
+  if (g.status !== 'waiting') { toast('游戏已开始或已过期', 'err'); return; }
+  if (Date.now() - new Date(g.created_at).getTime() > GAME_TTL) { toast('游戏已开始或已过期', 'err'); return; }
+  S.gameBusy = true;
+  var now = new Date().toISOString();
+  // 条件更新：仅当仍是 waiting 且 guest_id 为空时抢到（并发下只有一个赢家）
+  q(db.from('games').update({ guest_id: S.uid, guest_name: (S.me && S.me.nickname) || '', status: 'playing', turn: 'host', updated_at: now })
+    .eq('id', id).eq('status', 'waiting').eq('guest_id', '')
+    .select())
+    .then(function (rows) {
+      S.gameBusy = false;
+      if (!rows || !rows.length) { toast('游戏已开始或已过期', 'err'); refreshGames(); return; }
+      g.guestId = S.uid; g.guestName = (S.me && S.me.nickname) || ''; g.status = 'playing'; g.turn = 'host';
+      openRoom(id);
+    })
+    .catch(function (e) { S.gameBusy = false; toast('加入失败：' + (e.message || e), 'err'); });
+}
+// 五子棋：棋盘 15x15，board 用长度 225 的一维数组（0空 1黑 2白）
+var GB = {
+  n: 15,
+  idx: function (r, c) { return r * 15 + c; },
+  newBoard: function () { var a = []; for (var i = 0; i < 225; i++) a.push(0); return a; },
+  // 判断在 (r,c) 落子后是否五连
+  checkWin: function (board, r, c, v) {
+    var dirs = [[0, 1], [1, 0], [1, 1], [1, -1]];
+    for (var d = 0; d < 4; d++) {
+      var cnt = 1;
+      for (var s = -1; s <= 1; s += 2) {
+        for (var k = 1; k < 5; k++) {
+          var rr = r + dirs[d][0] * k * s, cc = c + dirs[d][1] * k * s;
+          if (rr < 0 || cc < 0 || rr >= 15 || cc >= 15) break;
+          if (board[GB.idx(rr, cc)] !== v) break;
+          cnt++;
+        }
+      }
+      if (cnt >= 5) return true;
+    }
+    return false;
+  },
+};
+// 落子
+function gamePlace(r, c) {
+  var id = S.gameOpen; var g = gameOf(id);
+  if (!g || g.status !== 'playing' || S.gameBusy) return;
+  var meSide = g.hostId === S.uid ? 'host' : 'guest';
+  if (g.turn !== meSide) { toast('还没轮到你落子', 'err'); return; }
+  var board = (g.board || []).slice();
+  if (!board.length) board = GB.newBoard();
+  if (board[GB.idx(r, c)] !== 0) { toast('这里已经有子了', 'err'); return; }
+  var val = g.hostId === S.uid ? 1 : 2;
+  board[GB.idx(r, c)] = val;
+  var win = GB.checkWin(board, r, c, val);
+  S.gameBusy = true;
+  var upd = {
+    board: board,
+    moves: (g.moves || []).concat([{ r: r, c: c, v: val, by: S.uid }]),
+    turn: win ? g.turn : (meSide === 'host' ? 'guest' : 'host'),
+    status: win ? 'over' : 'playing',
+    winner: win ? S.uid : '',
+    updated_at: new Date().toISOString(),
+  };
+  q(db.from('games').update(upd).eq('id', id).select()).then(function (rows) {
+    S.gameBusy = false;
+    var row = rows && rows[0];
+    if (row) S.games[id] = fromGameRow(row);
+    if (win) { toast('🎉 五子连珠，你赢了！'); }
+    renderRoom();
+  }).catch(function (e) { S.gameBusy = false; toast('落子失败：' + (e.message || e), 'err'); renderRoom(); });
+}
+function fromGameRow(r) {
+  return {
+    id: r.id, conv: r.conv, kind: r.kind,
+    hostId: r.host_id, hostName: r.host_name,
+    guestId: r.guest_id, guestName: r.guest_name,
+    status: r.status, turn: r.turn,
+    board: r.board || [], moves: r.moves || [],
+    winner: r.winner || '',
+    restartBy: r.restart_by || '', restartKind: r.restart_kind || '',
+    created_at: r.created_at, updated_at: r.updated_at,
+  };
+}
+function refreshGames() {
+  return q(db.from('games').select('*')).then(function (rows) {
+    S.games = {};
+    (rows || []).forEach(function (r) { S.games[r.id] = fromGameRow(r); });
+    if (S.gameOpen) renderRoom();
+    if (S.cur) renderMsgs();
+  }).catch(function () {});
+}
+// 打开对局浮层
+function openRoom(id) {
+  S.gameOpen = id;
+  var el = $('#groom');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'groom'; el.id = 'groom';
+    document.body.appendChild(el);
+  }
+  el.classList.remove('hidden');
+  renderRoom();
+}
+function closeRoom() {
+  S.gameOpen = null;
+  var el = $('#groom'); if (el) el.classList.add('hidden');
+  stopLeaveCountdown();
+  renderMsgs();
+}
+function stopLeaveCountdown() {
+  if (S.gameLeaveT) { clearInterval(S.gameLeaveT); S.gameLeaveT = null; }
+  S.gameLeaveN = 0;
+}
+function renderRoom() {
+  var el = $('#groom'); if (!el || !S.gameOpen) return;
+  var g = gameOf(S.gameOpen);
+  var kd = g ? (GAME_KINDS[g.kind] || GAME_KINDS.gomoku) : GAME_KINDS.gomoku;
+  if (!g) { el.innerHTML = '<div class="gr-top"><div class="gr-title">对局</div></div><div class="gr-body"><div class="gr-hint">对局已结束</div></div><div class="gr-foot"><button class="btn" id="grClose">关闭</button></div>'; bindRoomClose(); return; }
+  var mine = g.hostId === S.uid;
+  var iWin = g.status === 'over' && g.winner === S.uid;
+  var iLose = g.status === 'over' && g.winner && g.winner !== S.uid;
+  var otherLeft = g.status === 'left';
+  var head = '<div class="gr-top"><span class="gr-tag">' + kd.icon + ' ' + esc(kd.name) + '</span>'
+    + '<div class="gr-title">' + esc(mine ? '我 vs ' + (g.guestName || '等待加入') : (g.hostName || '对方') + ' vs 我') + '</div>'
+    + '<button class="ib" id="grExit" title="离开">✕</button></div>';
+
+  var body;
+  if (otherLeft) {
+    body = '<div class="gr-body"><div class="gr-hint">对方已经离开游戏，倒计时 <span id="grCnt" class="gr-cnt">3</span> 秒退出…</div>'
+      + '<div class="gpick2"><button class="pri" id="grLeaveNow">立即退出</button></div></div>';
+  } else if (g.status === 'over') {
+    if (mine) {
+      body = '<div class="gr-body"><div class="gr-hint">' + (iWin ? '🎉 你赢了！' : '😢 你输了') + '</div>'
+        + '<div class="gpick2"><button class="pri" data-gk="last">再来一局</button>'
+        + '<button data-gk="pick">其他游戏</button><button data-gk="end">结束游戏</button></div></div>';
+    } else {
+      body = '<div class="gr-body"><div class="gr-hint">' + (iWin ? '🎉 你赢了！' : '😢 你输了') + '</div>'
+        + '<div class="gr-hint" style="margin-top:16px">游戏房间清扫中~~~</div></div>';
+    }
+  } else if (g.status === 'waiting') {
+    body = '<div class="gr-body"><div class="gr-hint">等待对方加入…</div>'
+      + '<div class="gpick2"><button id="grCancel">取消邀请</button></div></div>';
+  } else {
+    body = '<div class="gr-body">'
+      + '<div class="gr-side">'
+      + '<div class="gr-pl' + (g.turn === 'host' ? ' on' : '') + '"><span class="dot"></span>' + esc(g.hostName || '发起方') + (mine ? '（我）' : '') + '</div>'
+      + '<div class="gr-pl' + (g.turn === 'guest' ? ' on' : '') + '"><span class="dot"></span>' + esc(g.guestName || '对手') + (!mine ? '（我）' : '') + '</div>'
+      + '</div>'
+      + '<canvas id="gBoard" width="450" height="450"></canvas>'
+      + '<div class="gr-hint" id="grHint"></div></div>';
+  }
+  el.innerHTML = head + body;
+  if (g.status === 'playing') drawBoard(g);
+  bindRoom(g);
+}
+function bindRoomClose() {
+  var c = $('#grClose'); if (c) c.onclick = closeRoom;
+}
+function bindRoom(g) {
+  var ex = $('#grExit');
+  if (ex) ex.onclick = function () {
+    confirmBox('确定离开本局游戏？', function () { leaveGame(); });
+  };
+  var cn = $('#grCancel');
+  if (cn) cn.onclick = function () { leaveGame(); };
+  var lv = $('#grLeaveNow');
+  if (lv) lv.onclick = closeRoom;
+  $$('#groom .gpick2 button[data-gk]').forEach(function (b) {
+    b.onclick = function () { roomChoice(b.dataset.gk); };
+  });
+  var cv = $('#gBoard');
+  if (cv) {
+    cv.onclick = function (ev) {
+      var rc = boardCell(cv, ev);
+      if (rc) gamePlace(rc.r, rc.c);
+    };
+    var hint = $('#grHint');
+    if (hint) {
+      var meSide = g.hostId === S.uid ? 'host' : 'guest';
+      hint.textContent = g.turn === meSide ? '轮到你落子' : '对方思考中…';
+    }
+  }
+}
+function boardCell(cv, ev) {
+  var rect = cv.getBoundingClientRect();
+  var pad = 15, cell = (450 - pad * 2) / 14;
+  var x = (ev.clientX - rect.left) * (450 / rect.width);
+  var y = (ev.clientY - rect.top) * (450 / rect.height);
+  var c = Math.round((x - pad) / cell);
+  var r = Math.round((y - pad) / cell);
+  if (r < 0 || c < 0 || r >= 15 || c >= 15) return null;
+  return { r: r, c: c };
+}
+function drawBoard(g) {
+  var cv = $('#gBoard'); if (!cv || !cv.getContext) return;
+  var ctx = cv.getContext('2d');
+  if (!ctx) return;   // 画布不可用（如浏览器禁用了 canvas）时静默降级，不让渲染崩掉
+  var pad = 15, cell = (450 - pad * 2) / 14;
+  ctx.clearRect(0, 0, 450, 450);
+  ctx.fillStyle = '#e9be7c'; ctx.fillRect(0, 0, 450, 450);
+  ctx.strokeStyle = '#7a5a2e'; ctx.lineWidth = 1;
+  for (var i = 0; i < 15; i++) {
+    var p = pad + i * cell;
+    ctx.beginPath(); ctx.moveTo(pad, p); ctx.lineTo(450 - pad, p); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p, pad); ctx.lineTo(p, 450 - pad); ctx.stroke();
+  }
+  var board = (g.board && g.board.length) ? g.board : GB.newBoard();
+  var lastMove = (g.moves || []).slice(-1)[0];
+  for (var r = 0; r < 15; r++) {
+    for (var c = 0; c < 15; c++) {
+      var v = board[GB.idx(r, c)];
+      if (!v) continue;
+      var cx = pad + c * cell, cy = pad + r * cell;
+      ctx.beginPath(); ctx.arc(cx, cy, cell * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = v === 1 ? '#1a1a1a' : '#fafafa';
+      ctx.fill();
+      ctx.strokeStyle = v === 1 ? '#000' : '#bbb'; ctx.stroke();
+      // 最后一手标记
+      if (lastMove && lastMove.r === r && lastMove.c === c) {
+        ctx.beginPath(); ctx.arc(cx, cy, cell * 0.16, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff4d4f'; ctx.fill();
+      }
+    }
+  }
+}
+// 结束后发起方的选择：再来一局 / 其他游戏 / 结束游戏
+function roomChoice(k) {
+  var id = S.gameOpen; var g = gameOf(id);
+  if (!g) return;
+  if (k === 'end') {
+    q(db.from('games').delete().eq('id', id)).then(function () { closeRoom(); refreshGames(); toast('已结束游戏'); });
+    return;
+  }
+  if (k === 'pick') { closeRoom(); $('#bGame').click(); return; }
+  if (k === 'last') {
+    // 再来一局：重置棋盘，双方重新开始（仍保持同一局记录）
+    var now = new Date().toISOString();
+    q(db.from('games').update({
+      board: [], moves: [], status: 'playing', turn: 'host', winner: '',
+      restart_by: S.uid, restart_kind: g.kind, updated_at: now,
+    }).eq('id', id).select()).then(function (rows) {
+      var row = rows && rows[0]; if (row) S.games[id] = fromGameRow(row);
+      renderRoom(); toast('新的一局开始！');
+    }).catch(function (e) { toast('操作失败：' + (e.message || e), 'err'); });
+  }
+}
+// 离开游戏
+function leaveGame() {
+  var id = S.gameOpen; var g = gameOf(id);
+  closeRoom();
+  if (!g) return;
+  var mine = g.hostId === S.uid;
+  if (g.status === 'waiting' && mine) {
+    // 发起方在等待阶段取消 → 删掉记录
+    q(db.from('games').delete().eq('id', id)).then(function () { refreshGames(); }).catch(function () {});
+    return;
+  }
+  if (g.status === 'playing') {
+    // 对局中离开 → 标记 left，对方看到倒计时
+    q(db.from('games').update({ status: 'left', updated_at: new Date().toISOString() }).eq('id', id))
+      .then(function () { refreshGames(); }).catch(function () {});
+  }
+}
+// 轮询同步游戏状态（由 tick 调用，接收已拉到的行）
+function applyGames(rows) {
+  var now = {};
+  (rows || []).forEach(function (r) { now[r.id] = fromGameRow(r); });
+  // 邀请卡片的状态指纹：只有状态真的变了才重渲染聊天区，避免每 2.5 秒刷一次、丢滚动位置
+  var sigOf = function (a) {
+    var s = ''; Object.keys(a).sort().forEach(function (k) { var g = a[k]; s += g.id + ':' + g.status + ':' + (g.guestId || '') + ':' + (g.winner || '') + ':' + (g.board || []).length + '|'; });
+    return s;
+  };
+  var prevSig = S.gameSig || '';
+  S.games = now;
+  var sig = sigOf(now);
+  S.gameSig = sig;
+  // 我正开着房间 → 状态变了就重渲染
+  if (S.gameOpen) {
+    var cur = now[S.gameOpen];
+    if (!cur) { closeRoom(); toast('对局已结束'); return; }
+    renderRoom();
+    // 对手离开 → 启动 3 秒倒计时
+    if (cur.status === 'left' && !S.gameLeaveT) startLeaveCountdown();
+  } else if (sig !== prevSig) {
+    // 没开房间但邀请卡片状态变了（对方加入 / 已结束 / 邀请过期）→ 同步聊天区卡片
+    if (S.cur) renderMsgs();
+  }
+}
+function startLeaveCountdown() {
+  stopLeaveCountdown();
+  S.gameLeaveN = 3;
+  var el = $('#grCnt'); if (el) el.textContent = String(S.gameLeaveN);
+  S.gameLeaveT = setInterval(function () {
+    S.gameLeaveN--;
+    var e2 = $('#grCnt');
+    if (e2) e2.textContent = String(Math.max(0, S.gameLeaveN));
+    if (S.gameLeaveN <= 0) { stopLeaveCountdown(); toast('对方已离开，对局结束'); closeRoom(); }
+  }, 1000);
+}
+// 邀请卡片点击（事件委托）
+document.addEventListener('click', function (ev) {
+  var t = ev.target;
+  if (!t || !t.closest) return;
+  var btn = t.closest('#mList .gbtn[data-g]');
+  if (btn) {
+    if (btn.classList.contains('dis') || btn.getAttribute('disabled') !== null) return;
+    var id = btn.dataset.g;
+    var g = gameOf(id);
+    if (!g) { toast('游戏已开始或已过期', 'err'); return; }
+    if (g.status === 'playing' && (g.hostId === S.uid || g.guestId === S.uid)) openRoom(id);
+    else joinGame(id);
+  }
+});
+// ==================== 游戏模块结束 ====================
+$('#bMore') && ($('#bMore').onclick = function () { if (S.cur) loadHistory(S.cur, (S.msgs[S.cur] || [])[0] && S.msgs[S.cur][0].id); });
 $('#sInput').addEventListener('input', function () { S.q = $('#sInput').value.trim().toLowerCase(); renderConvs(); });
 // 主题切换 / 退出登录（已收进左下角设置）
 function toggleTheme() {
