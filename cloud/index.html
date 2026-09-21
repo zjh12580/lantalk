@@ -325,10 +325,13 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 /* 左栏与棋盘成组居中，gap 收紧让信息栏贴近棋盘；整组不滚动（信息量固定，无需滚动条） */
 .groom .gr-body{flex:1;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:10px;padding:14px 18px;overflow:hidden;min-height:0}
 /* 左信息栏：固定宽度、纵向排布，绝不出现滚动条 */
-.groom .gr-side{flex:0 0 auto;width:186px;display:flex;flex-direction:column;gap:9px;overflow:hidden}
+.groom .gr-side{flex:0 0 auto;width:186px;display:flex;flex-direction:column;gap:9px;
+  overflow:hidden;align-self:stretch;justify-content:center;max-height:100%}
 .groom .gr-pl{display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:12px;background:var(--bg2);
-  border:1px solid var(--bd);font-size:13px;transition:.18s;box-sizing:border-box;min-width:0}
-.groom .gr-pl.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 10%,var(--bg2));box-shadow:0 0 0 1px var(--brand)}
+  border:1px solid var(--bd);font-size:13px;transition:.18s;box-sizing:border-box;min-width:0;flex:0 0 auto}
+/* 选中态用 inset 描边（不能用外扩 box-shadow —— 1px 溢出会被 .gr-side 的 overflow:hidden 裁成一条黑边） */
+.groom .gr-pl.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 10%,var(--bg2));
+  box-shadow:inset 0 0 0 1px var(--brand)}
 .groom .gr-pl .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .groom .gr-pl .side{font-size:11px;color:var(--tx3);flex:0 0 auto}
 .groom .gr-pl.on .side{color:var(--brand);font-weight:600}
@@ -336,20 +339,24 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .groom .gr-pl.on .dot{background:var(--brand);animation:livepulse 1.4s infinite}
 /* 左侧的「对局状态」提示条（轮到谁 / 思考中 / 走子提示） */
 .groom .gr-status{padding:9px 12px;border-radius:12px;background:var(--bg2);border:1px solid var(--bd);
-  font-size:12.5px;line-height:1.55;color:var(--tx2);text-align:left;box-sizing:border-box}
+  font-size:12.5px;line-height:1.55;color:var(--tx2);text-align:left;box-sizing:border-box;flex:0 0 auto}
 .groom .gr-status.brand{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 10%,var(--bg2));color:var(--brand);font-weight:600}
-/* 右侧棋盘区：占据剩余空间，居中 */
-.groom .gr-main{flex:0 1 auto;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+/* 右侧棋盘区：按同一高度预算约束（max-height:100%），避免矮窗口下棋盘被上下裁切 */
+.groom .gr-main{flex:0 1 auto;min-width:0;min-height:0;max-height:100%;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:10px}
 @media (max-width:720px){
   .groom .gr-body{flex-direction:column;gap:10px;padding:10px}
-  .groom .gr-side{width:100%;flex-direction:row;flex-wrap:wrap;align-items:center;overflow:visible;gap:8px}
+  .groom .gr-side{width:100%;flex-direction:row;flex-wrap:wrap;align-items:center;overflow:visible;gap:8px;
+    align-self:auto;max-height:none}
   .groom .gr-pl{flex:1 1 120px}
   .groom .gr-status{flex:1 1 100%;text-align:center}
-  .groom .gr-main{flex:1 1 auto}
+  .groom .gr-main{flex:1 1 auto;max-height:none}
 }
 /* 棋盘：尽量大 —— 同时受「可用宽」与「可用高」约束（min of 两者），避免纵向溢出 */
+/* 关键：--bh 是「可用高度预算」。canvas 是位图，只夹 max-height 只会裁掉上下两行，
+   必须用同一比例驱动宽高，才能在矮窗口下等比缩小。 */
 #gBoard{background:#e9be7c;border-radius:8px;box-shadow:var(--sd);touch-action:none;
-  width:min(var(--bw,620px),100%);height:auto;max-height:100%;display:block}
+  width:min(var(--bw,620px),100%,var(--bh,9999px));height:auto;display:block;margin:0 auto}
 #gBoard.bd-go{background:#dbb96a}
 #gBoard.bd-xq{background:#f0d9a8}
 /* 等待对方加入：棋盘只读 + 遮罩 */
@@ -4341,6 +4348,24 @@ function renderRoom() {
 function bindRoomClose() {
   var c = $('#grClose'); if (c) c.onclick = closeRoom;
 }
+// 棋盘等比自适应：算出棋盘区「可用高度」，写成 CSS 变量 --bh 参与 width:min()。
+// 这样窄窗口受宽度约束、矮窗口受高度约束，两种情况下都完整显示（不会上下被裁）。
+function fitBoard(cv) {
+  if (!cv || !cv.closest) return;
+  var main = cv.closest('.gr-main');
+  if (!main) return;
+  var top = $('#groom .gr-foot');           // 底部按钮栏会占高，需从预算里扣掉
+  var cs = window.getComputedStyle ? window.getComputedStyle(main) : null;
+  var padY = 0, gapY = 0;
+  if (cs) {
+    padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    gapY = parseFloat(cs.rowGap || cs.gap) || 0;
+  }
+  var avail = main.clientHeight - padY;
+  if (top && top.offsetHeight) avail -= top.offsetHeight;
+  if (avail > 0) main.style.setProperty('--bh', Math.floor(avail - gapY) + 'px');
+  else main.style.removeProperty('--bh');
+}
 function bindRoom(g) {
   var ex = $('#grExit');
   if (ex) ex.onclick = function () {
@@ -4361,6 +4386,13 @@ function bindRoom(g) {
   });
   var cv = $('#gBoard');
   if (cv) {
+    // 棋盘等比自适应：把「棋盘区实测可用高度」写成 --bh 参与 width:min(...)，
+    // 矮窗口下整块等比缩小，不会出现上下被裁掉（canvas 是位图，只夹 max-height 会裁图）
+    fitBoard(cv);
+    if (!cv._fitBound) {
+      cv._fitBound = true;
+      window.addEventListener('resize', function () { fitBoard($('#gBoard')); });
+    }
     cv.onclick = function (ev) {
       if (g.status === 'waiting') { toast('对方还未进入房间'); return; }
       var rc = boardCell(cv, ev, g.kind);
