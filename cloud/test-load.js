@@ -181,6 +181,16 @@ function makeStub() {
             }),
           });
         }
+        if (url.indexOf('api.coingecko.com') >= 0) {
+          return Promise.resolve({
+            ok: true, status: 200,
+            json: () => Promise.resolve([{
+              id: 'bitcoin', symbol: 'btc', name: 'Bitcoin',
+              current_price: 81507, price_change_percentage_24h: 1.4805,
+              total_volume: 24279642149, last_updated: new Date().toISOString(),
+            }]),
+          });
+        }
         return Promise.reject(new Error('no network in test'));
       };
       win.Notification = undefined;
@@ -599,6 +609,41 @@ function makeStub() {
   log(sideEl.classList.contains('open') && !D.querySelector('#sideMask').classList.contains('hidden'), '点 ☰ 展开侧栏并显示遮罩');
   D.querySelector('#sideMask').click();
   log(!sideEl.classList.contains('open'), '点遮罩收起侧栏');
+
+  // ===== 预置指令：输入 # 唤起菜单，#btc 拉取行情并渲染卡片 =====
+  const hallForCmd = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+  if (hallForCmd) hallForCmd.click();
+  await sleep(700);
+  const cmdInput = D.querySelector('#input');
+  const cmdpop = D.querySelector('#cmdpop');
+  cmdInput.value = '#';
+  cmdInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+  await sleep(140);
+  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 4, '输入 # 弹出 4 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
+  const btcItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#btc')[0];
+  log(!!btcItem, '菜单含 #btc 指令项');
+  const cardsBefore = D.querySelectorAll('#mList .cardmsg').length;
+  btcItem.click();
+  await sleep(800);
+  log(D.querySelectorAll('#mList .cardmsg').length === cardsBefore + 1, '执行 #btc 后新增一张行情卡片');
+  const card = D.querySelector('#mList .cardmsg .card');
+  log(!!card && card.textContent.indexOf('Bitcoin') >= 0 && card.textContent.indexOf('价格') >= 0 && card.textContent.indexOf('当日涨跌幅') >= 0 && card.textContent.indexOf('成交量') >= 0,
+    '卡片含 时间/价格/涨跌幅/成交量', card ? card.textContent.replace(/\s+/g, ' ').slice(0, 150) : 'none');
+  log(DATA.messages.some((m) => m.type === 'card'), '卡片作为 card 类型消息写入云端');
+  // #股票代码 菜单项：点击后输入框填 # 并提示输入代码
+  cmdInput.value = ''; cmdInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+  D.querySelector('#bCmd').click();
+  await sleep(140);
+  const stockItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#股票代码')[0];
+  log(!!stockItem, '菜单含 #股票代码 指令项');
+  stockItem.click();
+  await sleep(140);
+  log(cmdInput.value === '#' && cmdInput.placeholder.indexOf('股票代码') >= 0, '点 #股票代码 后输入框填 # 并提示输入代码', cmdInput.placeholder);
+  // 输入完整代码发送：验证 # 指令被拦截走行情逻辑（不按普通消息发）
+  cmdInput.value = '#600519';
+  D.querySelector('#bSend').click();
+  await sleep(300);
+  log(cmdInput.value === '', '发送 #600519 被 # 指令逻辑拦截（输入框已清空，未走普通文本发送）');
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
   console.log('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败\n');
