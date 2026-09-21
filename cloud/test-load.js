@@ -1780,7 +1780,8 @@ function makeStub() {
       const hint = D.querySelector('#groom #grHint');
       if (hint) log(hint.classList.contains('gr-status'), '轮次/提示文案放在左侧 .gr-status 里');
 
-      // 棋盘等比自适应：宽度参与 min() 的 --bh 变量存在（矮窗口靠它等比缩小，不裁上下）
+      // 棋盘等比自适应：jsdom 不做布局（clientHeight 恒为 0），无法断言真实像素，
+      // 这里只验证「宽度确实参与 --bh 约束」这一 CSS 契约 + fitBoard 在无布局时不误写坏值。
       const main = D.querySelector('#groom .gr-main');
       const cvb = D.querySelector('#gboard, #gBoard');
       log(!!main.style.getPropertyValue('--bh'),
