@@ -928,6 +928,15 @@ function botReply(conv, text, who) {
   if (!conv) return;
   var ans = null;
   try { ans = botAnswer(text, who, conv); } catch (e) { ans = null; }
+  // 命中关键词但技能是异步的（天气/新闻走网络）→ 等 Promise 回来再发，别把 "[object Promise]" 发出去
+  if (ans && typeof ans.then === 'function') {
+    botTyping(conv);
+    ans.then(function (s) {
+      var out = s ? String(s).replace(/\{n\}/g, who || '你').replace(/\{t\}/g, botTime()) : botPick(BOT_LINES);
+      return botSay(conv, out);
+    }).catch(function () { botStopTyping(); });
+    return;
+  }
   if (ans === null) {
     // AI 路径：未命中关键词 → 小美用 DeepSeek 回答（保持输入中直到回复返回）
     botHoldTyping(conv);
