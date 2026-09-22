@@ -156,6 +156,9 @@ async function so360Source(q) {
     let snip = s ? stripTags(s[1]) : '';
     // 去掉「7天前 -」「今天 11:19 -」这类前缀时间噪声（时间已由 title 层带）
     snip = snip.replace(/^(\d+\s*(天|小时|分钟|秒)前|今天|昨天|刚刚)\s*[-–]\s*/, '');
+    // ⚠️ 360 会把「结果序号」内联进摘要开头（"5 宇树科技…"）—— 模型会把它当正文读（踩过）。
+    //    只剥开头 1-2 位纯数字 + 分隔符，不影响正文里的真实数字。
+    snip = snip.replace(/^\d{1,2}\s*[.、,，:：)\]]?\s*/, '');
     out.push({ title, url, snippet: snip });
   }
   return out;
@@ -400,6 +403,7 @@ function buildSystemPrompt(opts) {
     '  3. 如果有人用的是「那个东西」「上次说的那个」这类指代，**从历史里找出到底指什么**再回答，别装傻也别瞎猜。',
     '  4. 可以自然地接住前文（「你刚说的那个 X，我觉得…」），让对方感觉你真的在听。',
     '  5. 上下文里没提到的信息，不要假装知道；实在推不出来就礼貌地问一句。',
+    '  6. 历史里带「名字：」前缀的是**别人**说的话；你自己说过的话不带前缀。你回复时**绝不要**给自己的话加「小美：」之类的前缀，直接说内容。',
     '',
     '# 怎么回答',
     '1. 【先理解，再回答】读懂对方的真实意图和语气，别只匹配字面关键词。对方吐槽、试探、开玩笑、欲言又止，都要接得住。',
@@ -444,7 +448,12 @@ async function runAgent(deps, req) {
 
   const messages = [{ role: 'system', content: buildSystemPrompt(req) }];
   (req.history || []).slice(-MAX_HISTORY).forEach((m) => {
-    if (m && m.role && m.content) messages.push({ role: m.role, content: String(m.content).slice(0, 2000) });
+    if (!m || !m.role || !m.content) return;
+    let content = String(m.content).slice(0, 2000);
+    // ⚠️ 自己的历史发言不能带「发言人：」前缀 —— 否则模型学会在正文里也写「小美：」
+    //    （实测指代消解回复以「小李：」开头，踩过）。别人的话必须留前缀（要靠它分清谁说的）。
+    if (m.role === 'assistant') content = content.replace(/^[^：:\n]{1,20}[：:]\s*/, '');
+    messages.push({ role: m.role, content });
   });
   messages.push({ role: 'user', content: text });
 

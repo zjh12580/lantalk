@@ -1973,6 +1973,13 @@ function makeStub() {
 
     // 探活要能列出完整通道链
     log(/channels: CHANNELS\.map/.test(SJS), '/api/chat 探活返回完整通道列表');
+
+    // 输出卫生：360 摘要序号不外泄 / 自己的历史发言不带发言人前缀（2026-09-22 实测踩坑）
+    log(/snip = snip\.replace\(\/\^\\d\{1,2\}/.test(AJS), '360 摘要开头的「结果序号」被剥离（模型不会把序号当正文）');
+    log(AJS.indexOf("if (m.role === 'assistant') content = content.replace(") >= 0,
+      'agentHistory 里自己的发言剥掉「发言人：」前缀（防模型模仿前缀）');
+    log(AJS.indexOf('绝不要') >= 0 && AJS.indexOf('给自己的话加') >= 0,
+      'System Prompt 明确禁止给回复加自己的名字前缀');
   }
 
   // ===== 会话历史加载 + @ 小美：源码级回归锁（2026-09-22）=====
