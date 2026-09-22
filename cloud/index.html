@@ -4338,14 +4338,19 @@ function gamePlace(r, c) {
   var meSide = g.hostId === S.uid ? 'host' : 'guest';
   if (g.turn !== meSide) { toast('还没轮到你', 'err'); return; }
   var eng = engineOf(g.kind);
-  var val = g.hostId === S.uid ? 1 : 2;
+  // ⚠️ 两个「我方棋子值」取值域完全不同，混用就是「两个人都只能动一边」那个 bug：
+  //    GX 用有符号数表示阵营（正=红、负=黑），GX.side() 认的是**正负号**不是数值，
+  //    所以 GX.side(2) === 1 —— 客人原本拿到 val=2，被判成红方，于是永远点不动自己的黑子。
+  //    五子棋/围棋的引擎则用 1/2 当颜色标识，必须保持 1/2。
+  var xqVal = g.hostId === S.uid ? 1 : -1;      // 象棋：红 +1 / 黑 -1
+  var val = g.hostId === S.uid ? 1 : 2;         // 五子棋·围棋：1 / 2
   var board = (g.board && g.board.length) ? g.board.slice() : eng.newBoard();
   var res, moveRec;
 
   if (g.kind === 'xiangqi') {
     var cur = board[GX.idx(r, c)];
     // 点自己棋子 → 选中 / 取消选中
-    if (cur && GX.side(cur) === GX.side(val)) {
+    if (cur && GX.side(cur) === GX.side(xqVal)) {
       S.xqSel = (S.xqSel && S.xqSel[0] === r && S.xqSel[1] === c) ? null : [r, c];
       renderRoom();
       return;
@@ -4353,7 +4358,7 @@ function gamePlace(r, c) {
     if (!S.xqSel) { toast('先点一下自己的棋子', 'err'); return; }
     res = GX.place(board, S.xqSel[0], S.xqSel[1], r, c);
     if (!res.ok) { toast(res.msg || '这步走不了', 'err'); S.xqSel = null; renderRoom(); return; }
-    moveRec = { fr: S.xqSel[0], fc: S.xqSel[1], r: r, c: c, v: val, by: S.uid };
+    moveRec = { fr: S.xqSel[0], fc: S.xqSel[1], r: r, c: c, v: xqVal, by: S.uid };
     S.xqSel = null;
   } else {
     res = eng.place(board, r, c, val);
@@ -4665,7 +4670,8 @@ function drawBoard(g) {
         // 可走点提示
         if (S.xqSel) {
           var selV = board[GX.idx(S.xqSel[0], S.xqSel[1])];
-          if (selV && GX.side(selV) === GX.side(g.hostId === S.uid ? 1 : 2)) {
+          if (selV && GX.side(selV) === (g.hostId === S.uid ? 1 : 2)) {
+            // ⚠️ 这里 GX.side() 返回 1(红)/2(黑)，与 xqVal 的 ±1 不同域，别去「统一」它
             var ms = GX.moves(board, S.xqSel[0], S.xqSel[1]);
             for (var m = 0; m < ms.length; m++) {
               if (ms[m][0] === rr && ms[m][1] === cc) {

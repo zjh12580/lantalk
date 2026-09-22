@@ -1203,6 +1203,66 @@ function makeStub() {
       await sleep(300);
     }
 
+    // 14b) 象棋：客方必须能操作自己那一侧（回归「两个人都只能动一边」）
+    //   根因：GX 用有符号数表示阵营（正=红/负=黑），GX.side() 认的是正负号 —— GX.side(2) === 1。
+    //   旧代码给双方都算 val = 房主?1:2，于是客人拿到 2 被判成红方，永远点不动自己的黑子。
+    //   这里同时锁住「行为」和「源码不再出现该写法」两层。
+    {
+      const GXeng2 = w.LT.GX;
+      log(!!GXeng2 && GXeng2.side(2) === 1 && GXeng2.side(-1) === 2,
+        '象棋引擎按正负号分阵营（GX.side(2)===1，故 2 不能当黑方用）');
+
+      // 让客方（u_a）拿到轮次，棋盘用引擎初始局面
+      const xqRow2 = { id: 'gm_xq2', conv: 'g:hall', kind: 'xiangqi', host_id: 'u_test', host_name: '云端测试', guest_id: 'u_a', guest_name: '甲', status: 'playing', turn: 'guest', board: GXeng2.newBoard(), moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      DATA.games.push(xqRow2);
+      // 把身份切成甲：S.uid !== host_id 才会走「客方」分支
+      const realUid = w.LT.S.uid;
+      w.LT.S.uid = 'u_a';
+      await sleep(200);
+      if (w.LT.openRoom) w.LT.openRoom('gm_xq2');
+      await sleep(400);
+      const cv2 = D.querySelector('#groom #gBoard');
+      log(!!cv2, '象棋客方视图：画布已渲染');
+      if (cv2) {
+        cv2.getBoundingClientRect = () => ({ left: 0, top: 0, width: 620, height: 620, right: 620, bottom: 620 });
+        const cX2 = (620 - 68) / 8, cY2 = (620 - 68) / 9;
+        const click2 = (r, c) => {
+          const ev = new w.MouseEvent('click', { clientX: 34 + c * cX2, clientY: 34 + r * cY2, bubbles: true });
+          cv2.dispatchEvent(ev);
+        };
+        // 黑方棋子：卒在 (3,0)（-1），将在 (0,4)（-7）
+        click2(3, 0);
+        await sleep(300);
+        log(!!w.LT.S.xqSel && w.LT.S.xqSel[0] === 3 && w.LT.S.xqSel[1] === 0,
+          '象棋：客方能选中自己的黑卒 (3,0)', w.LT.S.xqSel ? w.LT.S.xqSel.join(',') : 'none');
+        click2(4, 0);                       // 卒向前一步
+        await sleep(900);
+        const row2 = DATA.games.find((x) => x.id === 'gm_xq2');
+        const b2 = (row2 && row2.board) || [];
+        log(b2.length === 90 && b2[3 * 9 + 0] === 0, '象棋：客方走子后起点(3,0)清空', b2[3 * 9 + 0]);
+        log(b2.length === 90 && b2[4 * 9 + 0] === -1, '象棋：客方黑卒落到(4,0) 且值为 -1（没被错写成红方）', b2[4 * 9 + 0]);
+        log(!!row2 && row2.turn === 'host', '象棋：客方走子后轮次交回房主', row2 ? row2.turn : 'none');
+        const mv2 = (row2 && row2.moves || [])[0];
+        log(!!mv2 && mv2.v === -1, '象棋：行棋记录里客方棋子值为 -1（黑）', JSON.stringify(mv2 || null));
+        // 客方不该能选中红方的子
+        w.LT.S.xqSel = null;
+        click2(6, 0);                       // 红兵
+        await sleep(300);
+        log(!w.LT.S.xqSel, '象棋：客方选不中对方的红兵 (6,0)');
+      }
+      if (w.LT.close) w.LT.close();
+      w.LT.S.uid = realUid;
+      await sleep(300);
+
+      // 源码层锁定：不能再出现「把 2 当阵营」的写法
+      const xqSrc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+      log(!/GX\.side\(val\)/.test(xqSrc), '象棋：不再用 GX.side(val) 判阵营（val 属 1/2 域，必然误判）');
+      log(!/GX\.side\(g\.hostId === S\.uid \? 1 : 2\)/.test(xqSrc),
+        '象棋：不再是 GX.side(房主?1:2) 这种包装（把 2 包进 GX.side 只会得到红方）');
+      log(/g\.hostId === S\.uid \? 1 : -1/.test(xqSrc),
+        '象棋：改用 ±1 表示红黑（正=红、负=黑，与 GX 约定一致）');
+    }
+
     // 15) 棋类布局一致性：三种棋画布都用同一 620 逻辑边长（棋盘尽量大）
     {
       const B = w.LT.GAME_KINDS;
