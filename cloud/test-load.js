@@ -1907,7 +1907,17 @@ function makeStub() {
         'jsdom 无布局时不再写入 --bh（不会残留坏值）', main ? JSON.stringify(main.style.getPropertyValue('--bh')) : 'no main');
 
       // 选中玩家条不能有背景填充（border + inset 描边会在圆角内侧叠出深色块，用户反馈多次）
-      const cssTxt = Array.prototype.map.call(D.querySelectorAll('style'), (s) => s.textContent).join('\n');
+      // CSS 可能在 <style> 里（内联）也可能在 <link rel=stylesheet> 里（外置到 cloud/styles.css），
+      // 两种都要能取到。jsdom 不配 resources 时不会去加载 link，所以这里自己从磁盘读。
+      // ⚠️ 改动这段时注意：取不到文本时下面的正则全部匹配空串，断言会「静默失败」，
+      //    失败信息只显示「(未找到规则)」，很难看出是取文本的方式坏了而不是 CSS 真的错。
+      const cssTxt = Array.prototype.map.call(D.querySelectorAll('style, link[rel="stylesheet"]'), (s) => {
+        if (s.tagName === 'STYLE') return s.textContent;
+        const href = s.getAttribute('href') || '';
+        if (/^https?:/i.test(href)) return '';        // 外链（如字体）不读
+        try { return fs.readFileSync(path.join(__dirname, href.replace(/^\//, '')), 'utf8'); }
+        catch (e) { return ''; }
+      }).join('\n');
       const onRule = (cssTxt.match(/\.groom \.gr-pl\.on\{[^}]*\}/) || [''])[0];
       log(!!onRule && !/background|color-mix/.test(onRule),
         '选中玩家条只改边框/文字色，无背景填充', onRule || '(未找到规则)');
