@@ -1784,12 +1784,11 @@ function makeStub() {
       // 这里只验证「宽度确实参与 --bh 约束」这一 CSS 契约 + fitBoard 在无布局时不误写坏值。
       const main = D.querySelector('#groom .gr-main');
       const cvb = D.querySelector('#gboard, #gBoard');
-      log(!!main.style.getPropertyValue('--bh'),
-        '棋盘可用高度预算 --bh 已写入 .gr-main', main.style.getPropertyValue('--bh'));
-      const wcss = (typeof w.getComputedStyle === 'function' && cvb)
-        ? w.getComputedStyle(cvb).width : '';
-      log(!wcss || /%|px/.test(wcss), '棋盘宽度由 CSS width 控制（可被 --bh 约束）', wcss || '(jsdom 不解析)');
       log(!!cvb && typeof w.LT.fitBoard === 'function', '导出 fitBoard 供棋盘自适应调用');
+      log(!!cvb && /--bh/.test(cvb.getAttribute('style') || '') === false,
+        '棋盘自身不写死尺寸（由 CSS width:min() 控制）');
+      log(!!main && main.style.getPropertyValue('--bh') === '',
+        'jsdom 无布局时不再写入 --bh（不会残留坏值）', main ? JSON.stringify(main.style.getPropertyValue('--bh')) : 'no main');
 
       // 选中玩家条不能有背景填充（border + inset 描边会在圆角内侧叠出深色块，用户反馈多次）
       const cssTxt = Array.prototype.map.call(D.querySelectorAll('style'), (s) => s.textContent).join('\n');
