@@ -21,7 +21,7 @@ desktop.ini
 # 素材原始图（含 AI 生成水印，仅本地保留；干净成品在 cloud/assets/gen/）
 cloud/assets/*.png
 
-# 本地密钥配置（TypeSafe / DeepSeek 等第三方 key，只留在本机/部署环境）
+# 本地密钥配置（TypeSafe / DeepSeek / LLM 通道等第三方 key，只留在本机/部署环境）
 cloud/.typesafe.json
 cloud/.deepseek.json
 cloud/.llm.json
