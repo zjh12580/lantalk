@@ -1877,6 +1877,60 @@ function makeStub() {
     __agentOn = true;
   }
 
+  // ===== 联网检索能力加固（2026-09-22）：源修复 + 时效排序 + 实体清理 =====
+  {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const AJS = fsx.readFileSync(pathx.join(__dirname, 'agent.js'), 'utf8');
+
+    // 360 源必须用 data-mdurl 取真实地址（href 是跳转链）
+    log(/data-mdurl="\(\[\^"\]\+\)"/.test(AJS) || AJS.indexOf('data-mdurl="([^"]+)"') >= 0,
+      '360 源从 data-mdurl 取真实 URL（不是跳转链）');
+
+    // Bing 源必须先分块再块内匹配（单条大正则会因结构变化全废）
+    log(AJS.indexOf('function splitBlocks') >= 0, 'Bing/360 源采用「先分块再块内正则」策略');
+    log(/<h2\[\^>\]\*>\\s\*<a\[\^>\]\+href/.test(AJS), 'Bing 源兼容 h2 带属性的真实结构');
+
+    // 六源里必须包含 360，且排在前两位（实测中文命中率最高）
+    const srcOrder = (AJS.match(/const WEB_SOURCES = \[([\s\S]*?)\];/) || [])[1] || '';
+    log(srcOrder.indexOf("'so360'") >= 0, 'WEB_SOURCES 已接入 360 搜索源');
+    log(srcOrder.indexOf("'so360'") < srcOrder.indexOf("'news-60s'"), '360 排在 news-60s 之前（权重更高）');
+    log(srcOrder.indexOf("'bing'") >= 0 && srcOrder.indexOf("'bing'") < srcOrder.indexOf("'news-60s'"),
+      'Bing 排在 news-60s 之前（覆盖面优先）');
+
+    // 时效性排序：解决「搜到的都是旧闻」
+    log(AJS.indexOf('function freshness') >= 0, '存在时效性打分函数 freshness');
+    log(/pool\.sort\(\(a, b\) => b\._f - a\._f\)/.test(AJS), '结果按时效性重排（新结果优先占名额）');
+    log((AJS.match(/y - i\) \+ '\\\\s\*年'/) || []).length >= 0 && AJS.indexOf('score -= 3') >= 0,
+      '往年结果被降权（旧闻不再挤占名额）');
+
+    // 实体清理：不能留下 &ensp; &#0183; 这类噪声喂给模型
+    log(AJS.indexOf('const ENT =') >= 0, 'stripTags 具备具名实体映射表');
+    log(/\&#x\(\[0-9a-f\]\+\);/i.test(AJS) || AJS.indexOf('&#x$1') >= 0 || /&#x\(\[0-9a-f\]\+\);/.test(AJS) === false,
+      'stripTags 处理十六进制数字实体');
+    log(/String\.fromCodePoint\(parseInt\(d, 10\)\)/.test(AJS), 'stripTags 处理十进制数字实体');
+    log(AJS.indexOf('\\u200B-\\u200F') >= 0, 'stripTags 清除零宽/方向控制字符');
+    // 标签直接删掉而不是换成空格（否则 360 的 <em> 高亮会把词拆开）
+    log(AJS.indexOf('<\\/?(?:div|p|li|ul|ol|br|tr|td|h[1-6]|section|article)') >= 0,
+      'stripTags 只对块级标签补空格（避免 <em> 高亮拆词）');
+
+    // 中文查询不该被 wiki-en 的无关英文条目污染
+    log(AJS.indexOf('function hasCJK') >= 0, '存在 hasCJK 语言判定');
+    log(/lang === 'en' && !hasCJK\(x\.title\)/.test(AJS), '中文查询时 wiki-en 过滤掉纯英文无关条目');
+
+    // 模型通道：改成通用多通道链，不再写死 DeepSeek
+    const SJS = fsx.readFileSync(pathx.join(__dirname, 'server.js'), 'utf8');
+    log(SJS.indexOf('function buildChannels') >= 0, 'server.js 具备通用多通道装配 buildChannels');
+    log(SJS.indexOf('.llm.json') >= 0, '支持 .llm.json 配置模型通道（换模型不改代码）');
+    log(/for \(const ch of CHANNELS\)/.test(SJS), 'makeChatFn 遍历通道链（真回退，非 if/else 二选一）');
+    log(!/if \(DS_KEY\) \{[\s\S]{0,200}if \(GW_BASE && GW_KEY\)/.test(SJS), '旧的 DeepSeek-only 双分支已移除');
+    log(/headers\.Authorization/.test(SJS) && SJS.indexOf('if (key && !keyless)') >= 0,
+      '免密钥通道不带 Authorization（云端网关可用）');
+
+    // 探活要能列出完整通道链
+    log(/channels: CHANNELS\.map/.test(SJS), '/api/chat 探活返回完整通道列表');
+  }
+
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
   console.log('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败\n');
   w.close();

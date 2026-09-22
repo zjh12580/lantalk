@@ -22,10 +22,27 @@
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
+// 去标签 + 解 HTML 实体。
+// ⚠️ 实测（2026-09-22）：Bing/360 的摘要里带 &ensp; &#0183; &nbsp; 等，
+//    只解 &amp;/&lt; 这几个不够 → 残留噪声直接喂给模型。这里统一处理：
+//    ① 具名实体表 ② 十进制/十六进制数字实体 ③ 不可见空白字符。
+const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ensp: ' ', emsp: ' ', thinsp: ' ', shy: '', hellip: '…', mdash: '—', ndash: '–', middot: '·', ldquo: '“', rdquo: '”', lsquo: '‘', rsquo: '’' };
 function stripTags(s) {
-  return String(s || '').replace(/<[^>]*>/g, '').replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+  return String(s || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    // ⚠️ 普通标签**直接删掉、不要换成空格**：360/Bing 用 <em> 高亮关键词，
+    //    换成空格会把「连接池被打满」拆成「连接池 被打 满」（踩过）。
+    //    只有真正的块级/换行标签才补一个空格，避免相邻文本粘连。
+    .replace(/<\/?(?:div|p|li|ul|ol|br|tr|td|h[1-6]|section|article)[^>]*>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&([a-z]+);/gi, (m, n) => (ENT[n.toLowerCase()] !== undefined ? ENT[n.toLowerCase()] : m))
+    .replace(/&#x([0-9a-f]+);/gi, (m, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch (e) { return m; } })
+    .replace(/&#(\d+);/g, (m, d) => { try { return String.fromCodePoint(parseInt(d, 10)); } catch (e) { return m; } })
+    // 零宽/方向控制字符一并清掉
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function fetchJson(url, opts, timeoutMs) {
@@ -57,6 +74,9 @@ async function fetchText(url, opts, timeoutMs) {
 /* ---- 各检索源：都返回 [{title,url,snippet}]，失败抛错由上层跳过 ---- */
 
 // 维基百科（中/英）：条目型问题最稳，免 key、开 CORS
+// 查询里是否有中文（用于判断结果语言是否匹配）
+function hasCJK(s) { return /[\u4e00-\u9fa5]/.test(String(s || '')); }
+
 function wikiSource(lang) {
   return async function (q) {
     const j = await fetchJson(
@@ -67,7 +87,13 @@ function wikiSource(lang) {
       title: x.title || '',
       url: 'https://' + lang + '.wikipedia.org/wiki/' + encodeURIComponent(x.title || ''),
       snippet: stripTags(x.snippet || ''),
-    })).filter((x) => x.title || x.snippet);
+    }))
+      // ⚠️ 实测：中文查询喂给 wiki-en 会返回 Fan Bingbing 这类完全无关的条目（Wiki 全文搜索会
+      //    命中 snippet 里的中文引文）→ 噪声极大。规则：中文查询 + 英文维基，条目名必须也是中文才算相关。
+      .filter((x) => {
+        if (x.title && hasCJK(q) && lang === 'en' && !hasCJK(x.title) && !hasCJK(x.snippet)) return false;
+        return !!(x.title || x.snippet);
+      });
   };
 }
 
@@ -87,33 +113,65 @@ async function ddgSource(q) {
   return out;
 }
 
-// DuckDuckGo HTML 端点：能拿到真正的网页搜索结果（比 Instant Answer 覆盖广得多）
-async function ddgHtmlSource(q) {
-  const html = await fetchText('https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q));
+// 按搜索结果的「结果块」拆分 HTML：比单条大正则稳得多（正则一改结构就全废，踩过）
+function splitBlocks(html, sep) {
+  return String(html || '').split(sep).slice(1);
+}
+
+// Bing 中文：覆盖面广（HTML 端点，无需 key）
+// ⚠️ 实测（2026-09-22）真实结构：<li class="b_algo" ...><h2 class=""><a href="真实URL">标题</a></h2>
+//    <div class="b_caption"><p class="b_lineclamp2">摘要</p></div>
+//    —— h2 **带属性**、每个 b_algo 内先插一堆 <link>，所以必须「先分块再块内正则」。
+async function bingSource(q) {
+  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(q) + '&setlang=zh-CN&ensearch=0');
   const out = [];
-  const re = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>)?/g;
-  let m;
-  while ((m = re.exec(html)) && out.length < 6) {
-    let url = m[1] || '';
-    // DDG 会把真实地址包在 uddg= 参数里
-    const u = url.match(/[?&]uddg=([^&]+)/);
-    if (u) { try { url = decodeURIComponent(u[1]); } catch (e) {} }
+  for (const b of splitBlocks(html, /<li class="b_algo"/)) {
+    if (out.length >= 8) break;
+    const m = b.match(/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!m) continue;
+    const url = m[1];
     const title = stripTags(m[2]);
-    const snippet = stripTags(m[3]);
-    if (title) out.push({ title, url, snippet });
+    if (!title || !/^https?:/i.test(url)) continue;
+    // Bing 的摘要容器类名会变（b_lineclamp2/3/4…），只锚 b_caption 更稳
+    const s = b.match(/<div class="b_caption"[^>]*>[\s\S]*?<p[^>]*>([\s\S]*?)<\/p>/) || b.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+    out.push({ title, url, snippet: s ? stripTags(s[1]) : '' });
   }
   return out;
 }
 
-// Bing 中文：覆盖面广（HTML 端点，无需 key）
-async function bingSource(q) {
-  const html = await fetchText('https://www.bing.com/search?q=' + encodeURIComponent(q) + '&setlang=zh-CN&ensearch=0');
+// 360 搜索（so.com）：中文技术问答/资讯命中率最高，且带真实时间戳（最"新"）
+// ⚠️ 实测（2026-09-22）真实结构：<li class="res-list"><h3 class="res-title"><a data-mdurl="真实URL" href="跳转URL">…
+//    —— **href 是 so.com 跳转链，真实地址只在 data-mdurl**，取错 url 模型读到就全是垃圾。
+async function so360Source(q) {
+  const html = await fetchText('https://www.so.com/s?q=' + encodeURIComponent(q));
   const out = [];
-  const re = /<li class="b_algo"[\s\S]*?<h2[^>]*><a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a><\/h2>[\s\S]*?(?:<p[^>]*>([\s\S]*?)<\/p>)?/g;
+  for (const b of splitBlocks(html, /<li class="res-list"/)) {
+    if (out.length >= 8) break;
+    const m = b.match(/<h3[^>]*>\s*<a[^>]+data-mdurl="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!m) continue;
+    const url = m[1];
+    const title = stripTags(m[2]);
+    if (!title || !/^https?:/i.test(url)) continue;
+    const s = b.match(/<p class="res-desc"[^>]*>([\s\S]*?)<\/p>/) || b.match(/<p class="res-list-summary"[^>]*>([\s\S]*?)<\/p>/);
+    let snip = s ? stripTags(s[1]) : '';
+    // 去掉「7天前 -」「今天 11:19 -」这类前缀时间噪声（时间已由 title 层带）
+    snip = snip.replace(/^(\d+\s*(天|小时|分钟|秒)前|今天|昨天|刚刚)\s*[-–]\s*/, '');
+    out.push({ title, url, snippet: snip });
+  }
+  return out;
+}
+
+// 搜狗：补充源（结构用 h3 > a，真实链接可能是 /link?url= 跳转，取不到真链就丢弃）
+async function sogouSource(q) {
+  const html = await fetchText('https://www.sogou.com/web?query=' + encodeURIComponent(q));
+  const out = [];
+  const re = /<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h3>/g;
   let m;
   while ((m = re.exec(html)) && out.length < 6) {
     const title = stripTags(m[2]);
-    if (title) out.push({ title, url: m[1] || '', snippet: stripTags(m[3]) });
+    let url = m[1] || '';
+    if (url.indexOf('//') === 0) url = 'https:' + url;
+    if (title && /^https?:/i.test(url) && url.indexOf('sogou.com/link') < 0) out.push({ title, url, snippet: '' });
   }
   return out;
 }
@@ -142,42 +200,70 @@ async function newsSource(q) {
   }));
 }
 
+// ⚠️ 顺序＝权重（前面的源先用，占满 limit 就截断）。
+//    实测（2026-09-22）：中文技术/资讯问题 360 最准且带真实时间戳 → 排第一；
+//    Bing 覆盖面最广 → 第二；新闻类由 news-60s 顶；维基只作百科兜底。
+//    ddg-html 已失效（HTML 结构改版，result__a 恒为 0 条）→ 降权到最后并保留（万一恢复）。
 const WEB_SOURCES = [
-  { name: 'news-60s', fn: newsSource },
-  { name: 'ddg-html', fn: ddgHtmlSource },
+  { name: 'so360', fn: so360Source },
   { name: 'bing', fn: bingSource },
+  { name: 'news-60s', fn: newsSource },
   { name: 'wiki-zh', fn: wikiSource('zh') },
+  { name: 'sogou', fn: sogouSource },
   { name: 'ddg-api', fn: ddgSource },
   { name: 'wiki-en', fn: wikiSource('en') },
 ];
 
 /**
- * 多源并发检索：谁先有结果用谁，把前几个源的结果合并去重（最多 max 条）。
+ * 时效性打分：含「今天/刚刚/N小时前/2026年」等近期信号的加权重，明确是往年的降权。
+ * 目的：解决「搜到的都是旧闻」——让新结果优先占住 limit 名额。
+ */
+function freshness(title, snippet) {
+  const t = String(title || '') + ' ' + String(snippet || '');
+  const now = new Date();
+  const y = now.getFullYear();
+  let score = 0;
+  if (/刚刚|分钟前|小时前|今天|今日|昨天|前天/.test(t)) score += 4;
+  if (/\d+\s*天前/.test(t)) score += 2;
+  if (new RegExp(y + '\\s*年').test(t)) score += 2;          // 今年
+  if (/(本周|这周|近日|最新|近期)/.test(t)) score += 1;
+  // 明确写着往年的 → 扣分（如 2025年 / 2024年）
+  for (let i = 1; i <= 3; i++) if (new RegExp((y - i) + '\\s*年').test(t)) { score -= 3; break; }
+  return score;
+}
+
+/**
+ * 多源并发检索：按源顺序合并去重，但**同一批内按时效性重排**后取前 limit 条。
  * 全部失败返回 []，绝不抛错。
  */
 async function webSearch(query, max) {
   const q = String(query || '').trim();
   if (!q) return [];
-  const limit = Math.max(2, Math.min(max || 4, 5));
+  const limit = Math.max(2, Math.min(max || 5, 6));
   const settled = await Promise.all(WEB_SOURCES.map(async (s) => {
     try { return { name: s.name, rows: await s.fn(q) }; }
     catch (e) { return { name: s.name, rows: [], err: String(e.message || e) }; }
   }));
   const seen = new Set();
-  const out = [];
+  const pool = [];
   for (const s of settled) {
     for (const r of (s.rows || [])) {
       const key = (r.title || '').slice(0, 60) + '|' + (r.url || '').slice(0, 80);
       if (seen.has(key)) continue;
       if (!r.title && !r.snippet) continue;
       seen.add(key);
-      // ⚠️ snippet 必须收紧：6 次工具调用 × 12 条 × 400 字 ≈ 29KB，会把上下文撑爆 → 模型报错
-      out.push({ title: (r.title || '').slice(0, 120), url: r.url || '', snippet: (r.snippet || '').slice(0, 220), src: s.name });
-      if (out.length >= limit) break;
+      pool.push({
+        title: (r.title || '').slice(0, 120),
+        url: r.url || '',
+        snippet: (r.snippet || '').slice(0, 220),
+        src: s.name,
+        _f: freshness(r.title, r.snippet),
+      });
     }
-    if (out.length >= limit) break;
   }
-  return out;
+  // 时效高的排前面；同分保持原源顺序（稳定排序）
+  pool.sort((a, b) => b._f - a._f);
+  return pool.slice(0, limit).map(({ _f, ...r }) => r);
 }
 
 /* ===========================================================================

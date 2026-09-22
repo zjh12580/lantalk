@@ -10,11 +10,19 @@
  *   TYPESAFE_BASE_URL    TypeSafe API 基地址（默认 https://api.typesafe.ai，测试可指向 mock）
  *   TYPESAFE_MODEL       模型名（默认 jev-latest）
  *   INTENT_MIN_CONF      最低置信度阈值（默认 0.6）
- *   DEEPSEEK_API_KEY     小美主通道（DeepSeek 官方直连）。缺失时自动降级到云端网关
+ *   DEEPSEEK_API_KEY     小美模型通道（兼容旧部署，等价于 .llm.json 里的 deepseek 通道）
  *   DEEPSEEK_BASE_URL    覆盖 DeepSeek 基地址（默认 https://api.deepseek.com）
- *   DEEPSEEK_MODEL       覆盖主通道模型（默认 deepseek-chat）
+ *   DEEPSEEK_MODEL       覆盖模型名（默认 deepseek-flash）
+ *   LLM_GATEWAY_BASE_URL / LLM_GATEWAY_API_KEY / LLM_GATEWAY_MODEL  云端免密钥网关通道
  *
- * 密钥优先级：环境变量 > cloud/.typesafe.json / cloud/.deepseek.json（均已 gitignore，不会进仓库）
+ * 小美模型通道（推荐用法）：cloud/.llm.json 的 channels 数组，按顺序尝试、失败自动切下一个。
+ *   换模型只改这个文件，不动代码。示例：
+ *     { "channels": [ { "name":"glm", "base_url":"https://open.bigmodel.cn/api/paas/v4",
+ *                       "api_key":"xxx", "model":"glm-4-flash", "free":true } ] }
+ *   只要是 OpenAI 兼容端点（/chat/completions）都能接。
+ *
+ * 密钥优先级：环境变量 > cloud/.typesafe.json / cloud/.llm.json / cloud/.deepseek.json
+ *            （均已 gitignore，不会进仓库）
  */
 'use strict';
 const http = require('http');
@@ -35,8 +43,18 @@ function readDeepseekConfig() {
     return JSON.parse(fs.readFileSync(path.join(ROOT, '.deepseek.json'), 'utf8'));
   } catch (e) { return {}; }
 }
+// 小美 LLM 通道配置：任意 OpenAI 兼容服务的列表（按顺序尝试，前面失败自动切下一个）
+// 文件形如：
+//   { "channels": [ { "name":"glm", "base_url":"https://open.bigmodel.cn/api/paas/v4",
+//                     "api_key":"xxx", "model":"glm-4-flash", "free":true } ] }
+function readLLMConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ROOT, '.llm.json'), 'utf8'));
+  } catch (e) { return {}; }
+}
 const LOCAL = readLocalConfig();
 const DS = readDeepseekConfig();
+const LLMCFG = readLLMConfig();
 
 const PORT = process.env.PORT || LOCAL.port || 8080;
 const API_KEY = process.env.TYPESAFE_API_KEY || LOCAL.api_key || '';
@@ -44,14 +62,38 @@ const BASE_URL = (process.env.TYPESAFE_BASE_URL || LOCAL.base_url || 'https://ap
 const MODEL = process.env.TYPESAFE_MODEL || LOCAL.model || 'jev-latest';
 const MIN_CONF = parseFloat(process.env.INTENT_MIN_CONF || LOCAL.min_confidence || '0.6');
 
-// 小美主通道：DeepSeek 官方直连（非推理模型，首字快、理解好、不吐思考链）
-const DS_KEY = process.env.DEEPSEEK_API_KEY || DS.api_key || '';
-const DS_BASE = (process.env.DEEPSEEK_BASE_URL || DS.base_url || 'https://api.deepseek.com').replace(/\/+$/, '');
-const DS_MODEL = process.env.DEEPSEEK_MODEL || DS.model || 'deepseek-flash';
-// 云端 Keyless 网关（回退通道，免密钥）
-const GW_BASE = (process.env.LLM_GATEWAY_BASE_URL || '').replace(/\/+$/, '');
-const GW_KEY = process.env.LLM_GATEWAY_API_KEY || '';
-const GW_MODEL = process.env.LLM_GATEWAY_MODEL || 'glm-5.3-flash';
+/**
+ * 组装 LLM 通道链（按优先级）。
+ * 支持三种来源，后者补充前者、同名去重：
+ *   ① .llm.json 的 channels 数组（推荐：换免费模型只改这个文件）
+ *   ② DEEPSEEK_* 环境变量（兼容旧部署）
+ *   ③ .deepseek.json（兼容本地开发）
+ * 通道按 free=true 的往后排？不——**按数组/写入顺序为准**，给用户完全控制权。
+ */
+function buildChannels() {
+  const list = [];
+  const push = (c) => {
+    if (!c || !c.base_url || !c.model) return;
+    if (!c.api_key && !c.keyless) return;                     // 无 key 且非免密钥通道 → 跳过
+    const base = String(c.base_url).replace(/\/+$/, '');
+    if (list.some((x) => x.base === base && x.model === c.model)) return;
+    list.push({ name: c.name || base, base, key: c.api_key || '', model: c.model, free: !!c.free, keyless: !!c.keyless });
+  };
+
+  if (Array.isArray(LLMCFG.channels)) LLMCFG.channels.forEach(push);
+  if (process.env.DEEPSEEK_API_KEY) {
+    push({ name: 'deepseek', base_url: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com', api_key: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL || 'deepseek-flash' });
+  }
+  if (DS.api_key) push({ name: 'deepseek', base_url: DS.base_url || 'https://api.deepseek.com', api_key: DS.api_key, model: DS.model || 'deepseek-flash' });
+  if (process.env.LLM_GATEWAY_BASE_URL && process.env.LLM_GATEWAY_API_KEY) {
+    push({ name: 'gateway', base_url: process.env.LLM_GATEWAY_BASE_URL, api_key: process.env.LLM_GATEWAY_API_KEY, model: process.env.LLM_GATEWAY_MODEL || 'glm-5.3-flash' });
+  }
+  if (process.env.LLM_GATEWAY_BASE_URL && !process.env.LLM_GATEWAY_API_KEY) {
+    push({ name: 'gateway', base_url: process.env.LLM_GATEWAY_BASE_URL, model: process.env.LLM_GATEWAY_MODEL || 'glm-5.3-flash', keyless: true });
+  }
+  return list;
+}
+const CHANNELS = buildChannels();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -339,19 +381,19 @@ function accumulateChunk(acc, chunk) {
  * @returns {Promise<{content,tool_calls,model}>}
  */
 async function callOpenAICompat(opt) {
-  const { base, key, model, messages, tools, disableTools, onDelta, timeoutMs } = opt;
+  const { base, key, model, keyless, messages, tools, disableTools, onDelta, timeoutMs } = opt;
   const ac = new AbortController();
   const to = setTimeout(() => ac.abort(), timeoutMs || AGENT.DEFAULT_TIMEOUT);
   const body = { model, messages, stream: true };
   if (tools && tools.length && !disableTools) { body.tools = tools; body.tool_choice = 'auto'; }
+  // 免密钥通道（云端网关）不带 Authorization；有 key 的才带
+  const headers = { 'Content-Type': 'application/json' };
+  if (key && !keyless) headers.Authorization = 'Bearer ' + key;
   try {
     const r = await fetch(base.replace(/\/+$/, '') + '/chat/completions', {
       method: 'POST',
       signal: ac.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + key,
-      },
+      headers,
       body: JSON.stringify(body),
     });
     if (!r.ok) {
@@ -395,6 +437,7 @@ async function callOpenAICompat(opt) {
 }
 
 /** Agent 用的 chat 函数：主通道失败自动回退网关 */
+// 依次尝试所有通道，前面失败自动切下一个（这才是真正的"回退"）
 function makeChatFn(preferStream) {
   return async function chat(req) {
     const opts = {
@@ -404,15 +447,12 @@ function makeChatFn(preferStream) {
       onDelta: req.onDelta,
     };
     const errors = [];
-    if (DS_KEY) {
+    for (const ch of CHANNELS) {
       try {
-        return await callOpenAICompat(Object.assign({ base: DS_BASE, key: DS_KEY, model: DS_MODEL }, opts));
-      } catch (e) { errors.push('deepseek: ' + e.message); }
-    }
-    if (GW_BASE && GW_KEY) {
-      try {
-        return await callOpenAICompat(Object.assign({ base: GW_BASE, key: GW_KEY, model: GW_MODEL }, opts));
-      } catch (e) { errors.push('gateway: ' + e.message); }
+        const out = await callOpenAICompat(Object.assign({ base: ch.base, key: ch.key, model: ch.model, keyless: ch.keyless }, opts));
+        out._channel = ch.name + ':' + ch.model;
+        return out;
+      } catch (e) { errors.push(ch.name + ': ' + e.message); }
     }
     throw new Error(errors.length ? errors.join(' | ') : 'no_llm_channel_configured');
   };
@@ -453,8 +493,8 @@ function extractJsonArray(text) {
 }
 
 async function generatePlans(msgs, analysis) {
-  // 没有可用的聊天通道（DeepSeek / 云端网关）时返回 null → 前端隐藏建议区
-  if (!DS_KEY && !(GW_BASE && GW_KEY)) return null;
+  // 没有可用的聊天通道时返回 null → 前端隐藏建议区
+  if (!CHANNELS.length) return null;
   if (!Array.isArray(msgs) || !msgs.length) return [];
   const mood = analysis && analysis.mood && analysis.mood.choice;
   const intent = analysis && analysis.intent && analysis.intent.choice;
@@ -518,17 +558,20 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 小美智能体：GET 探活（是否有可用模型通道）
+  // 小美智能体：GET 探活（列出可用模型通道链）
   if (url.pathname === '/api/chat' && req.method === 'GET') {
+    const first = CHANNELS[0];
     return send(res, 200, {
       ok: true,
-      enabled: !!(DS_KEY || (GW_BASE && GW_KEY)),
-      primary: DS_KEY ? DS_MODEL : null,
-      fallback: (GW_BASE && GW_KEY) ? GW_MODEL : null,
+      enabled: CHANNELS.length > 0,
+      primary: first ? (first.name + ':' + first.model) : null,
+      primary_model: first ? first.model : null,
+      fallback: CHANNELS[1] ? (CHANNELS[1].name + ':' + CHANNELS[1].model) : null,
+      channels: CHANNELS.map((c) => ({ name: c.name, model: c.model, free: c.free })),
     });
   }
   if (url.pathname === '/api/chat' && req.method === 'POST') {
-    if (!DS_KEY && !(GW_BASE && GW_KEY)) return send(res, 200, { ok: false, reason: 'no_llm_channel' });
+    if (!CHANNELS.length) return send(res, 200, { ok: false, reason: 'no_llm_channel' });
     let payload;
     try { payload = JSON.parse((await readBody(req, 128 * 1024)) || '{}'); }
     catch (e) { return send(res, 400, { ok: false, reason: 'bad_json' }); }
@@ -547,7 +590,7 @@ const server = http.createServer(async (req, res) => {
         history: Array.isArray(payload.history) ? payload.history : [],
       });
       if (out && out.ok) cacheSet(ck, out);
-      return send(res, 200, Object.assign({ channel: DS_KEY ? 'deepseek' : 'gateway' }, out));
+      return send(res, 200, Object.assign({ channel: out && out.model ? out.model : (CHANNELS[0] && CHANNELS[0].model) }, out));
     } catch (e) {
       console.warn('[chat]', e.message);
       return send(res, 200, { ok: false, fallback: true, reason: 'upstream', detail: String(e.message || e).slice(0, 300) });
@@ -617,7 +660,10 @@ const server = http.createServer(async (req, res) => {
 if (require.main === module) {
   // ⚠️ 必须绑 0.0.0.0：部署环境通过反向代理访问单端口，只绑 localhost 会导致外部连不上
   server.listen(PORT, '0.0.0.0', () => {
-    console.log('[cloud] listening on 0.0.0.0:' + PORT + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)') + '  model=' + MODEL);
+    console.log('[cloud] listening on 0.0.0.0:' + PORT
+      + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)')
+      + '  intent_model=' + MODEL
+      + '  chat_channels=' + (CHANNELS.map((c) => c.name + ':' + c.model + (c.free ? '(free)' : '')).join(' > ') || 'none'));
   });
 }
 module.exports = { server, QUESTIONS, shapeAnswer, ANALYZE_QUESTIONS, shapeAnalyze };
