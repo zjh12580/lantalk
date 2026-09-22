@@ -1648,7 +1648,19 @@ function syncBotAvatarToDB() {
 }
 
 // ---------- 工具 ----------
-function q(p) { return p.then(function (r) { if (r.error) throw r.error; return r.data || []; }); }
+// 所有查询统一加超时：上游挂起时 Promise 永不 settle，会让 tick 的 S.busy 永久为真、
+// 轮询彻底停摆（只能刷新页面恢复）。加超时后至少能落到 catch，下一轮继续重试。
+// 超时值取得比任何单次查询的合理耗时都宽，避免正常慢查询被误杀。
+var Q_TIMEOUT = 15000;
+function q(p, tag) {
+  var to;
+  var guard = new Promise(function (_, rej) {
+    to = setTimeout(function () { rej(new Error('query_timeout' + (tag ? ':' + tag : ''))); }, Q_TIMEOUT);
+  });
+  // 交给 Promise.race：谁先 settle 用谁。无论哪边赢都要清掉定时器，否则会拖住 Node 的事件循环。
+  var settled = p.then(function (r) { if (r.error) throw r.error; return r.data || []; });
+  return Promise.race([settled, guard]).finally(function () { clearTimeout(to); });
+}
 // 按消息 id 去重追加到某会话的消息数组，返回是否真的新增
 function pushMsg(conv, m) {
   if (!m || m.id == null) return false;
@@ -1709,13 +1721,23 @@ function toast(msg, kind) {
   setTimeout(function () { el.remove(); }, 2600);
   el.onclick = function () { el.remove(); };
 }
+// AudioContext 复用单例：浏览器对同时存在的 AudioContext 有数量上限（Chrome 约 6 个），
+// 以前每次提示音都 new 一个再 close，密集收消息时容易撞上限后静默失效。
+var _audioCtx = null;
 function beep() {
   try {
-    var c = new (window.AudioContext || window.webkitAudioContext)();
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!_audioCtx) _audioCtx = new Ctx();
+    if (_audioCtx.state === 'suspended' && _audioCtx.resume) _audioCtx.resume();
+    var c = _audioCtx;
     var o = c.createOscillator(), g = c.createGain();
     o.connect(g); g.connect(c.destination);
     o.frequency.value = 880; g.gain.value = 0.05;
-    o.start(); setTimeout(function () { o.stop(); c.close(); }, 130);
+    o.start();
+    setTimeout(function () {
+      try { o.stop(); o.disconnect(); g.disconnect(); } catch (e) {}
+    }, 130);
   } catch (e) {}
 }
 // 桌面通知图标（品牌纸飞机，data URI 无需额外图片文件）
@@ -2027,7 +2049,19 @@ function enterApp() {
     openConv(hall ? hall.conv : (S.convs[0] ? S.convs[0].conv : null));
     setSync('云端已同步');
     startLoops();
+    bindGlobalResize();
   }).catch(function (e) { setSync('同步失败', true); toast('云端数据读取失败：' + (e.message || e), 'err'); });
+}
+// 窗口尺寸变化的全局监听：只绑一次。
+// 棋盘尺寸靠 CSS 变量 --bh 控制，窗口一变就要重算；但监听器绝不能跟着 canvas 走
+// （canvas 会被 innerHTML 重建），否则监听器会无限累积。
+function bindGlobalResize() {
+  if (S._resizeBound) return;
+  S._resizeBound = true;
+  window.addEventListener('resize', function () {
+    var b = document.getElementById('gBoard');
+    if (b) fitBoard(b);
+  });
 }
 
 // ---------- 数据加载 ----------
@@ -2173,9 +2207,12 @@ function applyReads(rows) {
   });
 }
 // 我发出的消息的已读状态：私聊「已读/未读」；群聊「N/M 已读」，点开看谁读了
-function readLabel(m) {
+// ⚠️ c 由调用方传入（renderMsgs 里已有当前会话对象）。以前这里每次调 cm() 重建整个
+//    会话 map，而 renderMsgs 对每条消息都要调一次 → O(消息数 × 会话数)，
+//    1000 条消息 × 50 会话就是 5 万次对象写入，且每 10 秒的轮询重渲染都来一轮。
+function readLabel(m, c) {
   if (!m || m.sender_id !== S.uid || m.revoked || m.type === 'system') return '';
-  var c = cm()[S.cur];
+  c = c || cm()[S.cur];
   if (!c) return '';
   var map = S.readsAll[m.conv] || {};
   if (c.type === 'private') {
@@ -2361,23 +2398,25 @@ function syncFriends(rows) {
 function onNew(m) {
   var c = cm()[m.conv];
   if (!c) { buildConvs(); c = cm()[m.conv]; }
-  // 会话对象可能还没建出来（对方第一条消息、群刚拉进来）——先落消息与未读，别丢
+  // ⚠️ 安全边界：会话列表推导不出来就说明这不是我的会话。
+  //    消息表是全员共享的，若对不属于自己的会话照单全收，会被 pushMsg 进内存、计未读，
+  //    还会把陌生人私聊的正文弹到系统桌面通知上。
+  //    会话在列表里的出现时机晚于它的第一条消息（群刚拉进来 / 对方刚发来），
+  //    所以 buildConvs 之后仍取不到才判定为「非我的会话」。
+  if (!c) return;
   var isCurrent = m.conv === S.cur;
-  var canRead = isCurrent && !document.hidden && !!c;
+  var canRead = isCurrent && !document.hidden;
   if (canRead) markRead(m.conv);
   var added = pushMsg(m.conv, m);
   if (added) trackRecent(m);        // 让 recent 追上最新消息，侧栏预览才不回退
   if (added && !canRead) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;   // 未读增量（权威）
   if (added && isCurrent) renderMsgs();
   if (added) maybeBotReply(m);
-  if (added && !canRead) {
-    var cname = c ? c.name : (m.sender_name || '新消息');
-    if (!c || !c.muted) {
-      notify(cname, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
-      if (S.sound) beep();
-    }
+  if (added && !canRead && !c.muted) {
+    notify(c.name, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
+    if (S.sound) beep();
   }
-  if (c && (m.mentions || []).indexOf(S.uid) >= 0) { c.atMe = true; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
+  if ((m.mentions || []).indexOf(S.uid) >= 0) { c.atMe = true; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
   // 重算会话列表：最新消息预览 / 排序 / 未读红点一次性对齐
   if (added) buildConvs();
   renderConvs();
@@ -2600,6 +2639,21 @@ window.addEventListener('focus', function () {
   document.body.classList.remove('unread-glow');
   if (S.cur) markRead(S.cur);
 });
+// 对局状态指纹：只挑会影响邀请卡片渲染的字段（状态/轮次/参与方/是否存在）。
+// 卡片是「按实时对局状态渲染」的，S.games 一变就必须重绘；把整张表 stringify 进指纹代价太高，
+// 所以这里只取当前会话消息里引用到的那些对局 id，逐个取状态拼接。
+function gameFingerprint(list) {
+  var ids = [];
+  (list || []).forEach(function (m) {
+    if (m && m.type === 'game' && m.text && ids.indexOf(m.text) < 0) ids.push(m.text);
+  });
+  if (!ids.length) return '';
+  return ids.map(function (id) {
+    var g = S.games[id];
+    if (!g) return id + ':none';
+    return id + ':' + g.status + ':' + (g.turn || '') + ':' + (g.guestId || '') + ':' + (g.winner || '') + ':' + (g.restartBy || '');
+  }).join(',');
+}
 function renderMsgs(scroll) {
   var box = $('#mList');
   // 关键：在替换内容「之前」先判定用户是否本来就在底部（此刻的数据是旧内容，scrollHeight 与视口匹配）。
@@ -2608,6 +2662,24 @@ function renderMsgs(scroll) {
   var wasAtBottom = distBefore < 80;
   var prevH = box.scrollHeight;
   var list = S.msgs[S.cur] || [];
+  var curConv = cm()[S.cur];   // 循环内复用：readLabel 不再每条消息重建一次会话 map
+  // ⚠️ 指纹去重：轮询每 4 轮（约 10 秒）会无条件调 renderMsgs，而它要重建整个 innerHTML
+  //    并重新绑定上百个事件监听。内容没变时这一轮纯属浪费（长会话下肉眼可见地卡）。
+  //    指纹必须覆盖**所有会影响渲染结果的状态**，漏一项就会让对应的 UI 卡住不更新：
+  //      · 消息维度：条数 / 末条 id / 撤回数（撤回只改字段不增条数）
+  //      · 已读维度：已读位变化要刷新「已读 / N/M 已读」
+  //      · 分页维度：是否还有更早的消息
+  //      · 对局维度：邀请卡片按 S.games 实时渲染（对局开始/结束/过期都要跟着变），
+  //                  漏掉它会导致卡片永远停在「等待对方加入」（有回归测试守着）
+  //    显式传 scroll='keep'/'bottom' 的调用（加载更早、自己发消息）必须绕过指纹，否则会被误挡。
+  var fp = S.cur + '|' + list.length + '|' + (list.length ? list[list.length - 1].id : 0)
+    + '|' + list.filter(function (m) { return m.revoked; }).length
+    + '|' + (S.readsAll[S.cur] ? JSON.stringify(S.readsAll[S.cur]) : '')
+    + '|' + (S.more[S.cur] ? 1 : 0)
+    + '|' + gameFingerprint(list);
+  var forced = (scroll === 'keep' || scroll === 'bottom');
+  if (!forced && fp === S._msgFp) return;
+  S._msgFp = fp;
   var html = '';
   if (S.more[S.cur]) html += '<div class="day"><span style="cursor:pointer" id="loadMore">加载更早的消息</span></div>';
   var lastDay = '';
@@ -2665,7 +2737,7 @@ function renderMsgs(scroll) {
         body += '<img class="at2" data-t="image" data-f="' + esc(m.file_path) + '" data-n="' + esc(m.file_name) + '" style="max-width:260px;border-radius:6px;background:var(--bg3)" alt="图片" title="点击查看大图">';
         if (m.text) body += '<div style="margin-top:6px">' + esc(m.text) + '</div>';
       } else if (m.type === 'file') body += '<div class="fcard" data-f="' + esc(m.file_path) + '" data-t="file"><span class="fi">📄</span><div><div class="fn">' + esc(m.file_name) + '</div><div class="fs">' + fmtSize(m.file_size) + ' · 点击下载</div></div></div>';
-      else body += esc(m.text).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:var(--at)">$1</a>')
+      else body += esc(m.text).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:var(--at)">$1</a>')
         .replace(/@([\u4e00-\u9fa5\w-]{1,20})/g, function (s0) { return (m.mentions || []).length ? '<span class="at">' + s0 + '</span>' : s0; });
       inner = '<div class="bub ' + ((m.mentions || []).indexOf(S.uid) >= 0 ? 'hl' : '') + '">' + body + '</div>';
     }
@@ -2686,7 +2758,7 @@ function renderMsgs(scroll) {
       + '<div class="meta">'
       + (S.cur.indexOf('g:') === 0 && !self ? '<span class="mname">' + esc(m.sender_name) + '</span>' : '')
       + '<span>' + fmtTime(m.created_at) + '</span>'
-      + rdHtml(self ? readLabel(m) : '')
+      + rdHtml(self ? readLabel(m, curConv) : '')
       + '</div>'
       + inner
       + ops + '</div></div>';
@@ -4640,11 +4712,10 @@ function bindRoom(g) {
   if (cv) {
     // 棋盘等比自适应：把「棋盘区实测可用高度」写成 --bh 参与 width:min(...)，
     // 矮窗口下整块等比缩小，不会出现上下被裁掉（canvas 是位图，只夹 max-height 会裁图）
+    // ⚠️ resize 监听不在这里绑：canvas 每次 renderRoom 都被 innerHTML 重建，
+    //    _fitBound 标记随之丢失 → 每渲染一次就多一个监听且永不移除（长时间挂机会累积上百个）。
+    //    改为模块初始化时绑一次，见 bindGlobalResize()。
     fitBoard(cv);
-    if (!cv._fitBound) {
-      cv._fitBound = true;
-      window.addEventListener('resize', function () { fitBoard($('#gBoard')); });
-    }
     cv.onclick = function (ev) {
       if (g.status === 'waiting') { toast('对方还未进入房间'); return; }
       var rc = boardCell(cv, ev, g.kind);
