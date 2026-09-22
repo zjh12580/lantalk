@@ -514,6 +514,29 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .bub img.at2{transition:transform .15s ease,box-shadow .15s ease}
 .bub img.at2:hover{box-shadow:0 4px 14px rgba(0,0,0,.25)}
 </style>
+<!-- ============ OneSignal Web Push（新消息桌面通知） ============ -->
+<!-- 1) OneSignal App ID 已配置：6a3141cd-e9d2-4f61-a8eb-75bbcdb0a945 -->
+<!--    生产发布前，请确认该 App 在 OneSignal 后台 Settings > Push & In-App > Web 的 Site URL 指向你的云端站点域名 -->
+<!-- 2) 确保同目录的 OneSignalSDKWorker.js 随站点发布到根目录（作用域为 "/"） -->
+<script>
+  window.ONE_SIGNAL_APP_ID = "6a3141cd-e9d2-4f61-a8eb-75bbcdb0a945";
+  window.__osReady = false;
+  // 只有填入真实 App ID 才初始化，避免占位符触发控制台报错 / 无效网络请求
+  if (window.ONE_SIGNAL_APP_ID && window.ONE_SIGNAL_APP_ID.indexOf('YOUR_') !== 0) {
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async function (OneSignal) {
+      try {
+        await OneSignal.init({
+          appId: window.ONE_SIGNAL_APP_ID,
+          notifyButton: { enable: false },   // 不显示 OneSignal 默认按钮，由应用自身（首次新消息）触发订阅
+          allowLocalhostAsSecureOrigin: true // 本地 server.js（localhost）也能测试 Web Push
+        });
+        window.__osReady = true;
+      } catch (e) { window.__osReady = false; }
+    });
+  }
+</script>
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
 </head>
 <body class="theme-dark">
 
@@ -1518,11 +1541,52 @@ function beep() {
     o.start(); setTimeout(function () { o.stop(); c.close(); }, 130);
   } catch (e) {}
 }
-function notify(title, body) {
+// 桌面通知图标（品牌纸飞机，data URI 无需额外图片文件）
+var LT_NOTIFY_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2307c160'/%3E%3Cpath d='M14 32 L50 16 L40 50 L32 38 L14 32 Z' fill='white'/%3E%3C/svg%3E";
+// 桌面通知：优先走 OneSignal 注册的 Service Worker（后台标签页也能稳定弹出，并打通 Web Push）；
+// OneSignal 未配置/未就绪时回退到浏览器原生 Notification。
+async function notify(title, body) {
+  try {
+    if (window.__osReady && navigator.serviceWorker) {
+      var reg = await navigator.serviceWorker.ready;
+      if (reg) {
+        await reg.showNotification(title, {
+          body: body,
+          icon: LT_NOTIFY_ICON,
+          badge: LT_NOTIFY_ICON,
+          tag: 'lantalk-msg',     // 同一 tag 合并为一条，避免刷屏
+          renotify: true,
+          data: { url: '/' }
+        });
+        return;
+      }
+    }
+  } catch (e) {}
+  // 原生 Notification 回退
   try {
     if (!window.Notification || Notification.permission !== 'granted') return;
     var n = new Notification(title, { body: body });
     setTimeout(function () { n.close(); }, 5000);
+  } catch (e) {}
+}
+// 申请通知权限：OneSignal 就绪时走 OneSignal（弹出系统订阅框），否则走原生 API
+function ensureNotifyPerm() {
+  try {
+    if (window.__osReady && window.OneSignal && OneSignal.Notifications) {
+      OneSignal.Notifications.requestPermission();
+      return;
+    }
+  } catch (e) {}
+  try {
+    if (window.Notification && Notification.permission === 'default') Notification.requestPermission();
+  } catch (e) {}
+}
+// 把当前用户 id 设为 OneSignal External User ID，便于服务端按人推送（关闭标签页后仍能收到）
+async function osSetUser(uid) {
+  try {
+    if (window.__osReady && window.OneSignal && uid) {
+      await OneSignal.User.addAlias('external_id', String(uid));
+    }
   } catch (e) {}
 }
 function setSync(txt, bad) { var e = $('#conn'); e.textContent = txt; e.style.color = bad ? 'var(--danger)' : 'var(--brand)'; }
@@ -1776,7 +1840,9 @@ function enterApp() {
   $('#app').classList.remove('hidden');
   applyTheme();
   renderMe();
+  osSetUser(S.uid);                                  // 登录后写入 OneSignal External User ID
   try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+  ensureNotifyPerm();
   setSync('同步中…');
   applyStoredImports();   // 先把本机保存的导入记录拼回来，再拉云端
   refreshAll().then(function () {
