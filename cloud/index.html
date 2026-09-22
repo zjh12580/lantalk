@@ -33,7 +33,12 @@ body{font:14px -apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",Roboto,s
 .ib{background:transparent;border:none;cursor:pointer;color:var(--tx2);font-size:17px;width:32px;height:32px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
 .ib:hover{background:var(--hover);color:var(--tx)}
 .ib.off{opacity:.4}
-.av{border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;flex-shrink:0;background:#888;aspect-ratio:1/1;overflow:hidden}
+.av{border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;flex-shrink:0;background:#888;position:relative;overflow:hidden}
+/* ⚠️ 头像图片必须绝对定位铺满，不能靠 width/height:100%。
+   .av 是 flex 容器，img 作为 flex item 时 height:100% 在部分尺寸下解析成
+   图片的自然高（实测 .av.m 38px 容器里 img 只有 28px 高）→ 上下露出灰底。
+   绝对定位 + inset:0 让图片脱离 flex 流，任何尺寸都严格铺满、等比裁切。 */
+.av > img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .av.s{width:30px;height:30px;font-size:15px;border-radius:6px}
 .av.m{width:38px;height:38px;font-size:20px}
 .av.l{width:56px;height:56px;font-size:30px;border-radius:12px}
@@ -324,26 +329,36 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 /* 左栏与棋盘成组居中，gap 收紧让信息栏贴近棋盘；整组不滚动（信息量固定，无需滚动条） */
 .groom .gr-body{flex:1;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:10px;padding:14px 18px;overflow:hidden;min-height:0}
 /* 左信息栏：固定宽度、纵向排布，绝不出现滚动条 */
-.groom .gr-side{flex:0 0 auto;width:186px;display:flex;flex-direction:column;gap:9px;
-  overflow:hidden;align-self:stretch;justify-content:center;max-height:100%}
-.groom .gr-pl{display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:12px;background:var(--bg2);
-  border:1px solid var(--bd);font-size:13px;transition:.18s;box-sizing:border-box;min-width:0;flex:0 0 auto}
-/* 选中态：只换边框颜色 + 文字/圆点变品牌色，不加任何背景填充、不叠第二层描边 ——
-   否则 border + inset box-shadow 会在圆角内侧叠出一块突兀的深色矩形。 */
+/* 左信息栏：固定宽容器，但子元素收缩到自身内容宽（不撑满），纵向排布，绝不滚动 */
+.groom .gr-side{flex:0 0 auto;width:186px;display:flex;flex-direction:column;align-items:flex-start;
+  gap:8px;overflow:visible;align-self:stretch;justify-content:center;max-height:100%}
+/* 玩家条：无底色、无边框 —— 靠绿框（选中态）与文字色区分。
+   常驻 2px 透明边框，选中时只换颜色 → 不产生布局位移。
+   宽度：width:fit-content 而非 align-self —— 列向 flex 下 align-self 不保证收缩，
+   实测会被拉伸到父容器宽（186px），看起来就像一条横贯的色带。 */
+.groom .gr-pl{display:flex;width:fit-content;align-items:center;gap:9px;padding:6px 12px;
+  border-radius:100px;background:transparent;border:2px solid transparent;font-size:13px;
+  transition:border-color .18s,color .18s;box-sizing:border-box;max-width:100%}
+/* 选中态：整圈绿色描边（单层 border，线条完整闭合）+ 文字/圆点变品牌色 */
 .groom .gr-pl.on{border-color:var(--brand)}
 .groom .gr-pl .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .groom .gr-pl.on .nm{color:var(--brand)}
-.groom .gr-pl .side{font-size:11px;color:var(--tx3);flex:0 0 auto}
-.groom .gr-pl.on .side{color:var(--brand);font-weight:600}
+/* ⚠️ 标签类名必须叫 .plt 而不是 .side —— 全局 .side 是主界面左侧会话列表的规则
+   （width:290px + background:var(--bg2) + border-right），撞名会在每条玩家条右侧
+   插进一个 290px 宽、带底色的「假侧栏」，被 overflow 裁成一条横贯的灰带。
+   这个坑排查了三轮才定位到，改名前务必先 grep 全局类名。 */
+.groom .gr-pl .plt{font-size:11px;color:var(--tx3);flex:0 0 auto}
+.groom .gr-pl.on .plt{color:var(--brand);font-weight:600}
 .groom .gr-pl .dot{width:7px;height:7px;border-radius:50%;background:var(--tx3);flex:0 0 auto}
 .groom .gr-pl.on .dot{background:var(--brand);animation:grpulse 1.4s infinite}
 /* 玩家条「轮到谁」指示点的呼吸动画：只做透明度，绝不能用 box-shadow 扩散 ——
    livepulse 是给直播红点设计的，带 5px 红色光环，贴在玩家条里会被 overflow 裁成一条脏弧线。 */
 @keyframes grpulse{0%,100%{opacity:1}50%{opacity:.35}}
-/* 左侧的「对局状态」提示条（轮到谁 / 思考中 / 走子提示） */
-.groom .gr-status{padding:9px 12px;border-radius:12px;background:var(--bg2);border:1px solid var(--bd);
-  font-size:12.5px;line-height:1.55;color:var(--tx2);text-align:left;box-sizing:border-box;flex:0 0 auto}
-/* 统一：状态条「轮到我」也只换边框 + 文字色，不加品牌色背景填充（与玩家条一致） */
+/* 左侧的「对局状态」提示条：同样无底色无框，只留文字；宽度贴合内容 */
+.groom .gr-status{width:fit-content;max-width:100%;padding:6px 12px;border-radius:100px;
+  background:transparent;border:2px solid transparent;font-size:12.5px;line-height:1.55;
+  color:var(--tx2);text-align:left;box-sizing:border-box}
+/* 状态条「轮到我」：换文字色 + 细描边，与玩家条风格一致 */
 .groom .gr-status.brand{border-color:var(--brand);color:var(--brand);font-weight:600}
 /* 右侧棋盘区：按同一高度预算约束（max-height:100%），避免矮窗口下棋盘被上下裁切 */
 .groom .gr-main{flex:0 1 auto;min-width:0;min-height:0;max-height:100%;display:flex;flex-direction:column;
@@ -352,8 +367,9 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
   .groom .gr-body{flex-direction:column;gap:10px;padding:10px}
   .groom .gr-side{width:100%;flex-direction:row;flex-wrap:wrap;align-items:center;overflow:visible;gap:8px;
     align-self:auto;max-height:none}
-  .groom .gr-pl{flex:1 1 120px}
-  .groom .gr-status{flex:1 1 100%;text-align:center}
+  /* 窄屏下恢复平分宽度，居中显示 */
+  .groom .gr-pl{flex:1 1 auto;align-self:stretch;justify-content:center}
+  .groom .gr-status{flex:1 1 100%;align-self:stretch;text-align:center}
   .groom .gr-main{flex:1 1 auto;max-height:none}
 }
 /* 棋盘：尽量大 —— 同时受「可用宽」与「可用高」约束（min of 两者），避免纵向溢出 */
@@ -1516,8 +1532,10 @@ function avOf(name, avatar, color, cls) {
   var cls2 = cls || 'm';
   if (isUrl) {
     var fb = String(name || '?').trim().charAt(0).toUpperCase();
-    return '<div class="av ' + cls2 + '" style="background:' + esc(color || '#888') + ';overflow:hidden">'
-      + '<img src="' + esc(a) + '" alt="" style="width:100%;height:100%;object-fit:cover;display:block"'
+    // 尺寸/裁切全部交给 .av > img 的 CSS（绝对定位铺满）；行内只留 onerror 兜底。
+    // 行内再写 width/height:100% 会在 flex 容器里被解析成自然高，导致上下露底。
+    return '<div class="av ' + cls2 + '" style="background:' + esc(color || '#888') + '">'
+      + '<img src="' + esc(a) + '" alt=""'
       + ' onerror="this.remove();this.parentNode.textContent=' + JSON.stringify(fb).replace(/"/g, '&quot;') + '">'
       + '</div>';
   }
@@ -4334,8 +4352,8 @@ function renderRoom() {
     // 发起方：直接展示棋盘（只读），并盖一层「等待对方进入」遮罩
     body = '<div class="gr-body gr-waitwrap">'
       + '<div class="gr-side">'
-      + '<div class="gr-pl on"><span class="dot"></span><span class="nm">' + esc(g.hostName || '发起方') + '</span><span class="side">' + (mine ? '我' : '发起') + '</span></div>'
-      + '<div class="gr-pl"><span class="dot"></span><span class="nm">' + esc(mine ? '等待加入' : (g.hostName || '对方')) + '</span><span class="side">' + (!mine ? '我' : '等待') + '</span></div>'
+      + '<div class="gr-pl on"><span class="dot"></span><span class="nm">' + esc(g.hostName || '发起方') + '</span><span class="plt">' + (mine ? '我' : '发起') + '</span></div>'
+      + '<div class="gr-pl"><span class="dot"></span><span class="nm">' + esc(mine ? '等待加入' : (g.hostName || '对方')) + '</span><span class="plt">' + (!mine ? '我' : '等待') + '</span></div>'
       + '<div class="gr-status" id="grHint">对方加入后即可开始落子</div>'
       + '</div>'
       + '<div class="gr-main">'
@@ -4351,8 +4369,8 @@ function renderRoom() {
       : '';
     body = '<div class="gr-body">'
       + '<div class="gr-side">'
-      + '<div class="gr-pl' + (g.turn === 'host' ? ' on' : '') + '"><span class="dot"></span><span class="nm">' + esc(g.hostName || '发起方') + '</span><span class="side">' + (mine ? '我' : '对手') + '</span></div>'
-      + '<div class="gr-pl' + (g.turn === 'guest' ? ' on' : '') + '"><span class="dot"></span><span class="nm">' + esc(g.guestName || '对手') + '</span><span class="side">' + (!mine ? '我' : '对手') + '</span></div>'
+      + '<div class="gr-pl' + (g.turn === 'host' ? ' on' : '') + '"><span class="dot"></span><span class="nm">' + esc(g.hostName || '发起方') + '</span><span class="plt">' + (mine ? '我' : '对手') + '</span></div>'
+      + '<div class="gr-pl' + (g.turn === 'guest' ? ' on' : '') + '"><span class="dot"></span><span class="nm">' + esc(g.guestName || '对手') + '</span><span class="plt">' + (!mine ? '我' : '对手') + '</span></div>'
       + '<div class="gr-status" id="grHint"></div>' + goEnd
       + '</div>'
       + '<div class="gr-main">'
