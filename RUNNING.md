@@ -1,27 +1,24 @@
 # LanTalk 云聊 · 开发环境运行说明
 
-这是一份「拿到就能跑」的开发环境说明。本包包含**局域网版**与**云端版**两套代码，主程序**零第三方依赖**，只有跑冒烟测试才需要装一个 jsdom。
+拿到就能跑：本仓库只维护**云端版**一套代码（`cloud/`）。
 
 ---
 
 ## 一、目录结构
 
 ```
-lantalk-dev/
-├── package.json          # 顶层：npm scripts + 测试依赖（jsdom）
-├── README.md             # 项目总览（功能/架构/云端表结构）
+lantalk/
+├── package.json          # npm scripts + 测试依赖（jsdom）
+├── README.md             # 项目总览（功能 / 接口 / 数据表）
 ├── RUNNING.md            # 本文件：怎么跑起来
-├── LanTalk.html          # 局域网版（单文件，推荐）：既是网页又是 Node 服务器
-├── LanTalk/              # 局域网版（多文件拆分）：功能相同，结构更清晰
-│   ├── server.js         #   HTTP 接口 + WebSocket + 静态服务（零依赖）
-│   ├── lib/              #   store.js(JSON存储) / ws.js(RFC6455) / presence.js(在线)
-│   ├── public/           #   前端（原生 HTML/CSS/JS）
-│   ├── test/             #   冒烟测试
-│   ├── deploy/           #   systemd 服务文件
-│   └── start.sh / stop.sh
-└── cloud/                # 云端版（推荐线上共用）
-    ├── index.html        #   单文件前端，连云端 Postgres + 对象存储
-    └── test-load.js      #   桩 SDK 冒烟测试（18+ 项）
+├── TEAM_SETUP.md         # 多人协作与 Git 认证配置
+└── cloud/                # 云端版（唯一维护版本）
+    ├── index.html        #   单文件前端
+    ├── server.js         #   静态托管 + /api/* 代理（密钥只留服务端）
+    ├── agent.js          #   小美智能体引擎
+    ├── schema.sql        #   数据库 DDL（表 + RLS + 鉴权函数）
+    ├── test-load.js      #   逻辑冒烟（jsdom + 桩 SDK）
+    └── test-intent.js    #   意图识别 / 模型通道冒烟
 ```
 
 ---
@@ -30,9 +27,8 @@ lantalk-dev/
 
 | 用途 | 依赖 | 说明 |
 |------|------|------|
-| 局域网版运行 | Node.js **16+** | 零 npm 依赖，装好 Node 直接跑 |
-| 云端版运行 | 浏览器即可 | 线上已发布，打开网址就能用 |
-| 跑测试 | Node.js + jsdom | 首次 `npm install` 装一次 jsdom |
+| 运行服务端 | Node.js **16+** | 只用内置模块，零第三方运行时依赖 |
+| 跑测试 | Node.js + jsdom | 首次 `npm install` 装一次 |
 
 **安装 Node.js**（Ubuntu/Debian 示例）：
 
@@ -42,99 +38,84 @@ sudo apt install -y nodejs
 node -v   # 需 >= v16
 ```
 
-**安装测试依赖**（在包根目录）：
+**安装测试依赖**：
 
 ```bash
-npm install        # 只装 jsdom，用于跑测试；主程序不需要
+npm install        # 只装 jsdom，用于跑测试
 ```
 
 ---
 
-## 三、局域网版：三步跑起来
+## 三、跑测试
 
 ```bash
-# 1. 进入目录
-cd LanTalk
-
-# 2. 启动（前台运行，Ctrl+C 停止）
-chmod +x start.sh && ./start.sh
-
-# 后台运行：./start.sh -d   （日志 lantalk.log，停止 ./stop.sh）
+npm test              # 全量：test-load → test-intent
+npm run test:load     # 只跑逻辑冒烟（约 379 项）
+npm run test:intent   # 只跑意图识别 / 模型通道
 ```
 
-启动后按提示访问：
+`test-load.js` 用 jsdom 加载真实页面并注入桩 SDK，覆盖登录 → 设昵称 → 进大厅 → 发消息 → 撤回 → 建群 → 好友 → 五子棋 → 围棋 → 输入面板等全流程。
 
-```
-本机访问:   http://localhost:3000
-局域网访问: http://<服务器IP>:3000
-```
-
-同一局域网内任意电脑/手机，浏览器打开 `http://<服务器IP>:3000` 即可，无需装客户端。
-
-**单文件版等价命令**：`node LanTalk.html`（在包根目录执行）。
-
-**常用配置**：
-
-```bash
-PORT=8080 ./start.sh                          # 换端口
-LANCHAT_DATA=/data/lantalk ./start.sh         # 换数据目录
-```
-
-详见 `LanTalk/README.md`（含 systemd 开机自启、防火墙放行、数据备份）。
+> **改动 `cloud/index.html` 后必须先跑通 `npm test` 再发布。**
+> 这套测试的价值很高：它曾精确捕获「邀请卡片不随对局状态更新」「消息前缀被模型模仿」等回归。
 
 ---
 
-## 四、跑测试
+## 四、本地起服务（可选）
 
 ```bash
-# 后端冒烟（局域网多文件版，29 项，零依赖）
-cd LanTalk && node test/smoke.js
-
-# 前端运行时（需 jsdom，先 npm install）
-cd LanTalk && node test/ui-check.js          # 多文件版 14 项
-node LanTalk/test/ui-single.js               # 单文件版 16 项
-
-# 云端版冒烟（需 jsdom，桩 SDK，18+ 项）
-node cloud/test-load.js
+npm start              # node cloud/server.js，默认 8080
+PORT=9000 npm start
 ```
 
-**一键跑主要测试**（包根目录）：
+打开 <http://localhost:8080> 可以验证 `/api/*` 接口是否正常（探活接口返回通道链）。
 
-```bash
-npm test          # = lan:test(后端) + cloud:test(云端)
-npm run lan:ui    # 前端运行时
-```
+> ⚠️ **云端页面本身在 localhost 打不开**：云端 SDK 只在应用自己的 HTTPS 域名下工作，
+> 用 `file://` 或 `localhost` 会被源校验拒绝。本地服务只用于验证服务端接口，
+> 真实页面预览必须发布到线上域名。
 
 ---
 
-## 五、云端版
+## 五、密钥配置
 
-### 线上地址
+密钥**只留服务端、不入库**，优先级：环境变量 > 本地配置文件。
 
-| 环境 | 地址 | 说明 |
-|------|------|------|
-| 旧版（原数据） | https://lan-talk.app.workbuddy.host/ | 最早发布，存量用户/数据在这里 |
-| 新版（最新改动） | https://lan-talk-v2.app.workbuddy.host/ | 2026-09-20 新建，含 UI 改动与闪动修复 |
+| 文件 | 用途 |
+|------|------|
+| `cloud/.typesafe.json` | 意图识别 / 聊天洞察（Jev）的 key |
+| `cloud/.llm.json` | 小美的模型通道链（推荐：换模型只改这里） |
+| `cloud/.deepseek.json` | 兼容旧部署的单通道配置 |
 
-两个环境相互独立，账号数据不互通。
+`.llm.json` 支持任意 OpenAI 兼容端点，按数组顺序尝试、失败自动切下一个：
 
-### 改完代码怎么上线
+```json
+{
+  "channels": [
+    { "name": "glm", "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key": "xxx", "model": "glm-4-flash", "free": true }
+  ]
+}
+```
 
-云端版靠 WorkBuddy 云服务发布，代码里的 `ENDPOINT`/`PUBKEY` 决定了连哪个云端环境：
-
-1. 改 `cloud/index.html`
-2. 自测：`npm run cloud:test`
-3. 重新发布（复用同一个应用 ID，域名和登录态不变）
-
-> ⚠️ 云端 SDK 只在应用自己的 HTTPS 域名下工作，用 `file://` 或 `localhost` 打开会被源校验拒绝。要真实预览必须发布到线上。
-
-云端版数据库 schema（6 张表 + 23 条 RLS + 2 个鉴权函数）详见根目录 `README.md` 的「云端版」章节。
+三个文件都已在 `.gitignore` 里，不会进仓库。
 
 ---
 
-## 六、常见问题
+## 六、数据库
 
-- **同事打不开页面**：防火墙放行端口；同一网段；`curl http://服务器IP:3000` 本机自测。
-- **脚本报 `bad interpreter` / `^M`**：Windows 拷过去的换行符问题，`sed -i 's/\r$//' start.sh stop.sh`。
-- **测试报 `Cannot find module 'jsdom'`**：忘了 `npm install`，在包根执行一次即可。
-- **数据在哪**：局域网版全部在 `LanTalk/data/`（或 `LANCHAT_DATA` 指定目录），备份拷该目录即可。
+建表与 RLS 的完整 DDL 见 `cloud/schema.sql`（6 张业务表 + `games`/`live`，含全部 RLS 策略与两个 `SECURITY DEFINER` 鉴权函数）。
+
+新环境部署时**先执行 schema.sql**，再起服务。
+
+---
+
+## 七、常见问题
+
+| 现象 | 原因 / 处理 |
+|------|------------|
+| 页面白屏、提示「云端组件加载失败」 | 网络不通，或不在应用自己的 HTTPS 域名下打开 |
+| 测试报 `Cannot find module 'jsdom'` | 忘了 `npm install` |
+| 意图识别不生效 | 没配 `TYPESAFE_API_KEY`；前端会自动降级为本地关键词路由 |
+| 小美不回复 | 没配任何模型通道；`GET /api/chat` 会返回 `channels: []` |
+| 改了代码线上没变化 | 云端版需要重新发布才生效（复用应用 ID，域名与登录态不变） |
+| 脚本报 `bad interpreter` / `^M` | Windows 换行符问题，`sed -i 's/\r$//' <script>` |

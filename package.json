@@ -1,17 +1,14 @@
 {
-  "name": "lantalk-dev",
+  "name": "lantalk",
   "version": "1.0.0",
   "private": true,
-  "description": "LanTalk 云聊 · 完整开发环境（局域网版 + 云端版 + 冒烟测试），主程序零第三方依赖",
+  "description": "LanTalk 云聊 · 云端版（邮箱登录 + 云端 Postgres/对象存储 + 小美 AI 智能体）",
   "scripts": {
-    "lan:start": "cd LanTalk && node server.js",
-    "lan:test": "cd LanTalk && node test/smoke.js",
-    "lan:ui": "cd LanTalk && node test/ui-check.js",
-    "cloud:test": "node cloud/test-load.js",
-    "cloud:serve": "node cloud/server.js",
-    "intent:test": "node cloud/test-intent.js",
-    "stamp": "node scripts/stamp-version.mjs",
-    "test": "npm run lan:test && npm run cloud:test && npm run intent:test"
+    "start": "node cloud/server.js",
+    "test": "node cloud/test-load.js && node cloud/test-intent.js",
+    "test:load": "node cloud/test-load.js",
+    "test:intent": "node cloud/test-intent.js",
+    "stamp": "node scripts/stamp-version.mjs"
   },
   "devDependencies": {
     "jsdom": "^22.1.0"
