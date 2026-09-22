@@ -1797,6 +1797,14 @@ function makeStub() {
         '选中玩家条只改边框/文字色，无背景填充', onRule || '(未找到规则)');
       log(!!onRule && !/box-shadow/.test(onRule),
         '选中玩家条不再叠第二层描边（避免圆角内侧深色块）', onRule ? 'ok' : '(未找到规则)');
+
+      // 指示点动画不能用带 box-shadow 扩散的 livepulse（红色光环会被 overflow 裁成脏弧线）
+      const dotRule = (cssTxt.match(/\.groom \.gr-pl\.on \.dot\{[^}]*\}/) || [''])[0];
+      log(!/livepulse/.test(dotRule), '玩家条指示点不再复用直播红点动画 livepulse', dotRule || '(未找到规则)');
+      log(/grpulse/.test(dotRule), '玩家条指示点改用纯透明度呼吸动画 grpulse', dotRule || '(未找到规则)');
+      const grpulseDef = (cssTxt.match(/@keyframes grpulse\{[^@]*\}/) || [''])[0];
+      log(!!grpulseDef && !/box-shadow/.test(grpulseDef),
+        'grpulse 不含 box-shadow 扩散（从根上消除溢出被裁）', grpulseDef || '(未找到定义)');
     }
   }
 
