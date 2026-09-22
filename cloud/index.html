@@ -840,12 +840,34 @@ function botSkill(n, arg, who) {
   if (n === 6) return botHot();
   return BOT_MENU;
 }
+// 时间词/动词/语气词：会出现在地名的**前面**（明天上海）或**后面**（广州今天、会不会、呢），
+// 两头都要剥，否则「广州今天多少度」会解析出「广州今天」（踩过）
+var CITY_PRE = /^(今天|明天|后天|大后天|现在|当前|昨日|昨天|明儿|明早|今晚|今早|中午|早上|晚上|下午|上午|这会儿|的|查|查下|查一下|查询|看看|看|报|报个|说说|问|问下|问一下|告诉我|知道|帮我|帮|我想|我要|了解|一下|下|个)+/;
+var CITY_POST = /(今天|明天|后天|现在|当前|这两天|这几天|最近|今日|明日|的天气|天气|气温|温度|要不要带伞|要带伞|带伞吗|会不会|会不|会|要|下不下雨|下雨|下雪|冷不冷|热不热|多少度|怎么样|怎样|如何|呢|吗|吧|啊|呀|哈|哦|喔|了|的)+$/;
+// 从自然语言里解析城市名（抽出来单独可测，天气主流程只负责取数据）
+function parseCity(text) {
+  var raw = String(text || '')
+    .replace(/@小美/g, '').replace(/[\?？。！!，,、；;:：]/g, ' ');
+  raw = raw.replace(/(的)?(天气|气温|温度|下雨|下雪|下不下雨|多少度|穿什么|冷不冷|热不热)/g, ' ');
+  var city = '';
+  var seg = raw.split(/\s+/).filter(Boolean);
+  for (var i = 0; i < seg.length; i++) {
+    var w = seg[i], guard = 0;
+    while (guard++ < 10) {
+      var before = w;
+      w = w.replace(CITY_PRE, '').replace(CITY_POST, '').trim();
+      if (w === before) break;
+    }
+    w = w.replace(/[的地得]$/, '').trim();
+    if (w) { city = w; break; }
+  }
+  if (!city || !/[\u4e00-\u9fa5a-zA-Z]/.test(city)) city = '北京';
+  if (city.length > 8) city = '北京';
+  return city;
+}
 // 天气：open-meteo（免 key、支持浏览器跨域）
 function botWeather(text, who) {
-  var t = String(text || '');
-  var m = t.match(/([\u4e00-\u9fa5]{2,8}?)(?:的)?(?:天气|气温|温度|下雨|下雪|多少度)/);
-  var city = m ? m[1].replace(/^(查|看看|看|报|报个|说说|问|一下|下)/, '') : '';
-  if (!city || /^(今天|明天|后天|现在|当前|一下|个|我|你|他)$/.test(city)) city = '北京';
+  var city = parseCity(text);
   var geoUrl = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city) + '&count=1&language=zh&format=json';
   return fetch(geoUrl).then(function (r) { return r.json(); }).then(function (g) {
     var hit = g && g.results && g.results[0];
@@ -892,13 +914,18 @@ function fetchFirst(list, k, qs) {
     return out;
   }).catch(function () { return fetchFirst(list.slice(1), k, qs); });
 }
+// ⚠️ 源会失效，按「当前实测可用」排序；失效的直接换掉。
+//    2026-09-22 实测：原三源（60s.vip / vvhan / oioweb）全部 curl 000（已挂），
+//    viki.moe 返回真实当日新闻且带 `Access-Control-Allow-Origin: *`，提到首位。
 var NEWS_SOURCES = [
+  { u: 'https://60s-api.viki.moe/v2/60s', pick: function (j) { return parse60s(j); } },
   { u: 'https://60s.vip/api/60s', pick: function (j) { return parse60s(j); } },
   { u: 'https://api.vvhan.com/api/60s', pick: function (j) { return parse60s(j); } },
   { u: 'https://api.oioweb.cn/api/common/60s', pick: function (j) { return parse60s(j); } },
 ];
 var HOT_SOURCES = [
-  { u: 'https://60s.vip/api/60s', pick: function (j, k) { return parse60s(j); } },
+  { u: 'https://60s-api.viki.moe/v2/60s', pick: function (j, k) { return parse60s(j); } },
+  { u: 'https://60s.vip/api/60s', pick: function (j) { return parse60s(j); } },
   { u: 'https://api.vvhan.com/api/60s', pick: function (j) { return parse60s(j); } },
 ];
 // ---------- 联网检索（给小美做「手工 RAG」用；全部是免 key 公益源，浏览器可直接跨域）----------
@@ -956,16 +983,46 @@ function searchWeb(q) {
     return (rows || []).filter(function (x) { return x.title || x.snippet; }).slice(0, 4);
   }).catch(function () { return []; });
 }
-var NEWS_DOWN = '📰 新闻源今天集体打不通了 😥 稍后再叫我试试～（可以先回复 1 听个笑话换换心情）';
+// 新闻/热点：真实日报源挂了不再直接报错，退化为「联网检索 + 模型总结」
+function botNewsFallback(kind) {
+  var qs = kind === 'hot' ? '今日热点 热搜 话题' : '今日新闻 要闻';
+  return ensureLLM().then(function () {
+    if (!S.llmModel) return null;
+    return searchWeb(qs).then(function (rows) {
+      if (!rows || !rows.length) return null;
+      var ref = rows.map(function (x, i) {
+        return (i + 1) + '. ' + x.title + (x.snippet ? '：' + x.snippet : '');
+      }).join('\n');
+      var head = '📰 ' + (kind === 'hot' ? '今日热点' : '新闻速览') + '（实时整理）\n';
+      var sys = '你是「小美」。用户想了解[[' + (kind === 'hot' ? '今日热点' : '今日新闻') + ']]。'
+        + '请基于【联网资料】整理成 5 条以内的要点，每条一行、以序号开头；'
+        + '资料里没有的不要编。不要输出思考过程，不要客套。';
+      var messages = [{ role: 'system', content: sys }, { role: 'user', content: qs + '\n\n【联网资料】\n' + ref }];
+      var ctrl = new AbortController(), to = setTimeout(function () { ctrl.abort(); }, LLM_TIMEOUT);
+      var out = '';
+      return (async function () {
+        try {
+          for await (var chunk of CLOUD.llm.chat.completions.create({ model: S.llmModel, messages: messages, stream: true, signal: ctrl.signal })) {
+            var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+            if (d && d.content) out += d.content;
+          }
+        } finally { clearTimeout(to); }
+        return out.trim() ? head + out.trim() : null;
+      })();
+    });
+  }).catch(function () { return null; });
+}
 function botNews() {
   return fetchFirst(NEWS_SOURCES).then(function (body) {
     return '📰 新闻速览\n' + body;
-  }).catch(function () { return NEWS_DOWN; });
+  }).catch(function () { return botNewsFallback('news'); })
+    .then(function (s) { return s || '📰 新闻源今天打不通，我上网也没搜到靠谱的，{n}过会儿再问我试试～'; });
 }
 function botHot() {
   return fetchFirst(HOT_SOURCES).then(function (body) {
     return '🔥 今日热点\n' + body;
-  }).catch(function () { return '🔥 热点源暂时失联了 😥 稍后再叫我试试～'; });
+  }).catch(function () { return botNewsFallback('hot'); })
+    .then(function (s) { return s || '🔥 热点源今天打不通，我上网也没搜到靠谱的，{n}过会儿再问我试试～'; });
 }
 // ---------- 联网检索：小美的「手工 RAG」 ----------
 // 她自身知识截止后就不知道了，这里先上网捞几条事实，再把「问题 + 检索结果」一起扔给 DeepSeek 综合。
@@ -989,6 +1046,30 @@ function botSearch(text, who) {
     return '🔎 我先上网查了「' + q + '」，查到这些：\n' + lines.join('\n');
   });
 }
+// 检索词清洗：把「@小美」「查一下」这类指令词剥掉，留下干净的查询串
+// ⚠️ 必须先归并空白再剥指令词：`@小美 查一下 X` 把「@小美」换成空格后
+//    字符串变成「 查一下 X」（**带前导空格**），而下面的正则用 `^` 锚定行首 →
+//    前导空格一挡，`查一下` 就剥不掉了，检索词带着指令词去查维基（踩过）。
+function sanitizeQuery(text) {
+  var s = String(text || '')
+    .replace(/@小美/g, ' ')
+    .replace(/[?？。！!，,、；;：:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // 循环剥离：用户可能叠着说「帮我查一下」「麻烦你帮我搜一下」（三层前缀都能剥）
+  for (var i = 0, prev = ''; i < 8 && s !== prev; i++) {
+    prev = s;
+    s = s.replace(/^(帮我|请|麻烦你?|小美|我要|我想|想知道|了解一下)\s*/, ' ');
+    s = s.replace(/^(查一下|查查|查询|查|搜一下|搜搜|搜索|搜|找一下|找找|查找|上网查|百度一下|谷歌一下|google一下|说说|解释一下|介绍一下|科普一下|总结一下|总结|汇总|看看|看)+/, ' ');
+    s = s.replace(/^(的|一下|下|个|关于|有关|一下下)+/, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+  }
+  return s;
+}
+// 联网问答意图（教程/文档/命令/解释/总结…）：用户明确要求上网查 → 强制检索，不靠启发式猜
+// ⚠️ 必须排在最终闲聊兜底（return null）之前，否则这些表达会全被当闲聊吞掉（踩过：
+//    用户反馈「不能联网查技能」就是这个原因）
+var LOOKUP_RE = /查一下|查查|帮我查|搜一下|搜搜|搜索|上网查|百度|谷歌|google|找一下|找找|查找|搜|教程|怎么用|怎么使用|如何使用|怎么|如何|用法|文档|手册|命令|指令|语法|示例|例子|总结一下|总结|汇总|资料|百科|解释一下|解释|介绍一下|介绍|科普|是什么|什么是|为什么/;
 function botAnswer(text, who, conv) {
   var t = String(text || '').replace(/@小美/g, '').replace(/\s+/g, ' ').trim();
   // 技能菜单：你可以干什么 / 帮助
@@ -1011,6 +1092,10 @@ function botAnswer(text, who, conv) {
     if (BOT_KEY[i].k.test(t)) return botPick(BOT_KEY[i].r);
   }
   if (!t) return botPick(BOT_LINES);
+  // 联网问答意图（教程/怎么用/文档/命令/解释/总结/什么是…）：标记为强制联网，交给 botReply 检索+模型综合
+  // ⚠️ 必须排在 return null 之前 —— 否则这些表达会被当闲聊，模型凭记忆瞎答或答不上来
+  //    也不能直接 return botSearch()（那只给检索原文、不给模型综合，体验差）
+  if (LOOKUP_RE.test(t)) { S.lookupAt = { conv: conv, at: Date.now() }; return null; }
   // 未命中关键词 → 需要事实性回答的，先联网检索（走手工 RAG）
   if (botSearchNeed(t)) return botSearch(t, who);
   return null;   // 闲聊类 → 交给 DeepSeek（由 botReply 决定走 AI 还是旧兜底）
@@ -1097,36 +1182,52 @@ function botTyping(conv) {
 // ---- 小美 × DeepSeek：云端 Keyless LLM 网关（同源 /.cloud/llm，免 CORS，密钥云端配）----
 // ⚠️ 前端不存任何 apikey：密钥由云端网关托管，这里只选「用哪个模型」。
 // 云上 DeepSeek 均为「纯推理模型（onlyReasoning）」且 effort=high，要先跑思考链再出正文，
-// 首字延迟明显高于普通对话模型 → 超时给到 45s（25s 容易被 abort 成「卡了一下」）
-var LLM_TIMEOUT = 45000;
+// 首字延迟明显高于普通对话模型 → 超时给到 30s（且必须 < botHoldTyping 的 60s「输入中」预算）
+// 单模型失败会走 botLLM 的多模型回退链，所以单个超时不必给太长，30s 内拿到结果或换模型更快。
+var LLM_TIMEOUT = 30000;
 // 首选型号（按优先级）。deepseek-v4.1-flash：1M 上下文 / 原生多模态 / 积分最低
 // 想临时换型号调试：地址后加 ?llm=deepseek-v4-pro 即可，无需改代码
 var LLM_PREFERRED = ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v3-2-volc'];
 // 懒加载并选定模型：按优先级精确匹配 → 任意 deepseek → 任意可用；都没有则 S.llmModel 保持 null
+// ⚠️⚠️ 必须缓存 Promise（S.llmReady）而不是布尔标志（旧 S.llmTried）！
+//    旧实现 `if (S.llmTried) return; S.llmTried = true;` 有致命竞态：
+//    并发第二次调用会「同步立即 return，但 S.llmModel 还没被赋值」
+//    → 调用方读到 S.llmModel === null → 秒回「哎呀我这边卡了一下」。
+//    真实触发：sendMsg 本地立即回一次 + tick() 轮询把同一条消息拉回来又回一次，
+//    两条并发路径里第二条必然拿到 null（实测消息 id 只隔 1.07 秒，证明是同步立即返回）。
+//    同源症状：「@小美 上海天气」回了两次。
 async function ensureLLM() {
-  if (S.llmTried) return; S.llmTried = true;
-  try {
-    var models = await CLOUD.llm.models.list();
-    if (!models || !models.length) return;
-    var ok = function (m) { return m && m.disabled !== true && m.enabled !== false; };
-    var avail = models.filter(ok);
-    if (!avail.length) return;
-    // 1) URL 参数覆盖（调试用）
-    var want = null;
-    try { want = new URLSearchParams(location.search).get('llm'); } catch (e) {}
-    if (want) { var hit = avail.find(function (m) { return m.id === want; }); if (hit) { S.llmModel = hit.id; return; } }
-    // 2) 按优先级精确匹配（不靠列表顺序碰运气）
-    for (var i = 0; i < LLM_PREFERRED.length; i++) {
-      var p = avail.find(function (m) { return m.id === LLM_PREFERRED[i]; });
-      if (p) { S.llmModel = p.id; return; }
-    }
-    // 3) 兜底：任意 deepseek → 任意可用
-    var ds = avail.find(function (m) { return /deepseek/i.test((m.id || '') + ' ' + (m.name || '')); });
-    S.llmModel = (ds || avail[0]).id;
-  } catch (e) { S.llmModel = null; }
+  if (S.llmReady) { await S.llmReady; return; }
+  S.llmReady = (async function () {
+    try {
+      var models = await CLOUD.llm.models.list();
+      var arr = Array.isArray(models) ? models : (models && Array.isArray(models.data) ? models.data : []);
+      if (!arr.length) return;
+      var ok = function (m) { return m && m.disabled !== true && m.enabled !== false; };
+      var avail = arr.filter(ok);
+      if (!avail.length) return;
+      // 候选链：按 LLM_PREFERRED 顺序挑出所有可用 deepseek，失败可依次回退
+      S.llmQueue = [];
+      var want = null;
+      try { want = new URLSearchParams(location.search).get('llm'); } catch (e) {}
+      LLM_PREFERRED.forEach(function (id) {
+        var hit = avail.filter(function (m) { return m.id === id; })[0];
+        if (hit && S.llmQueue.indexOf(hit.id) < 0) S.llmQueue.push(hit.id);
+      });
+      avail.forEach(function (m) {
+        if (/deepseek/i.test((m.id || '') + ' ' + (m.name || '')) && S.llmQueue.indexOf(m.id) < 0) S.llmQueue.push(m.id);
+      });
+      if (want && avail.filter(function (m) { return m.id === want; })[0]) S.llmQueue.unshift(want);
+      avail.forEach(function (m) { if (S.llmQueue.indexOf(m.id) < 0) S.llmQueue.push(m.id); });
+      S.llmModel = S.llmQueue[0] || null;
+    } catch (e) { S.llmQueue = []; S.llmModel = null; }
+  })();
+  await S.llmReady;
 }
 // 调 DeepSeek 生成回复（收集流式输出，复用会话最近若干条历史做上下文）
 // ref：可选的联网检索结果（手工 RAG），拼进 system 提示，让小美基于事实回答而不是凭记忆瞎编
+// ⚠️ 多模型回退链：首选模型超时/被拒时自动换下一个，而不是直接扔「卡了一下」
+var LLM_RETRY = 2;
 async function botLLM(text, who, conv, ref) {
   if (!CLOUD.llm || !CLOUD.llm.chat || !CLOUD.llm.chat.completions) throw new Error('llm unavailable');
   if (!S.llmModel) throw new Error('no model');
@@ -1140,20 +1241,35 @@ async function botLLM(text, who, conv, ref) {
   var hist = (S.msgs[conv] || []).filter(function (m) { return m && m.type === 'text' && m.text; })
     .slice(-6).map(function (m) { return { role: m.sender_id === BOT.id ? 'assistant' : 'user', content: String(m.text) }; });
   var messages = [{ role: 'system', content: sys }].concat(hist, [{ role: 'user', content: text }]);
-  var content = '', ctrl = new AbortController(), to = setTimeout(function () { ctrl.abort(); }, LLM_TIMEOUT);
-  // 请求体：只传必要字段。云上 DeepSeek 全是「纯推理模型（onlyReasoning）」，
-  // 采样参数由模型锁定，强行传 temperature 可能被拒 → 不传，用模型默认值。
-  var req = { model: S.llmModel, messages: messages, stream: true, signal: ctrl.signal };
-  if (S.llmTemp != null) req.temperature = S.llmTemp;
-  try {
-    for await (var chunk of CLOUD.llm.chat.completions.create(req)) {
-      var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
-      // 推理模型会先吐 reasoning_content（思考链），这里只收集正式回复，避免把思考过程发进聊天室
-      if (d && d.content) content += d.content;
-    }
-  } finally { clearTimeout(to); }
-  if (!content.trim()) throw new Error('empty');
-  return content.trim();
+
+  async function once(model, withTemp) {
+    var content = '', ctrl = new AbortController(), to = setTimeout(function () { ctrl.abort(); }, LLM_TIMEOUT);
+    // 请求体：只传必要字段。云上 DeepSeek 全是「纯推理模型（onlyReasoning）」，
+    // 采样参数由模型锁定，强行传 temperature 可能被拒 → 默认不传。
+    var req = { model: model, messages: messages, stream: true, signal: ctrl.signal };
+    if (withTemp && S.llmTemp != null) req.temperature = S.llmTemp;
+    try {
+      for await (var chunk of CLOUD.llm.chat.completions.create(req)) {
+        var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+        // 推理模型会先吐 reasoning_content（思考链），这里只收集正式回复，避免把思考过程发进聊天室
+        if (d && d.content) content += d.content;
+      }
+    } finally { clearTimeout(to); }
+    if (!content.trim()) throw new Error('empty');
+    return content.trim();
+  }
+  // 候选模型 ×（带温度 / 不带温度），逐个 attempt，失败自动换下一个
+  var queue = (S.llmQueue && S.llmQueue.length ? S.llmQueue.slice() : [S.llmModel]);
+  var attempts = [];
+  queue.forEach(function (m) { attempts.push({ m: m, t: true }, { m: m, t: false }); });
+  attempts = attempts.slice(0, Math.max(2, LLM_RETRY * 2));
+  var i = 0, lastErr = null;
+  while (i < attempts.length) {
+    var a = attempts[i++];
+    try { return await once(a.m, a.t); }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('llm failed');
 }
 // 输入中保持显示（直到调用方手动 botStopTyping），用于 AI 推理耗时较长的情况
 function botHoldTyping(conv) {
@@ -1197,6 +1313,11 @@ function botReply(conv, text, who) {
   if (ans === null) {
     // 闲聊路径：先问 Jev「这条消息想干什么」，命中预置功能就直接执行；
     // 未命中/不可用再让小美猜「要不要联网」，需要就检索（手工 RAG），把资料喂给 DeepSeek
+    // ⚠️ lookup 意图（教程/怎么用/文档/命令…）是「用户明确要求上网查」→ 强制检索，不再交给 searchNeed 猜
+    var lookupForced = false;
+    if (S.lookupAt && S.lookupAt.conv === conv && Date.now() - S.lookupAt.at < 15000) {
+      lookupForced = true; S.lookupAt = null;
+    }
     botHoldTyping(conv);
     (async function () {
       try {
@@ -1206,9 +1327,11 @@ function botReply(conv, text, who) {
       var out;
       if (S.llmModel) {
         var ref = '';
-        if (S.webSearch !== false && botSearchNeed(text)) {
+        var needSearch = S.webSearch !== false && (lookupForced || botSearchNeed(text))
+          && !/^记住|忘掉/.test(text);
+        if (needSearch) {
           try {
-            var rows = await searchWeb(text);
+            var rows = await searchWeb(sanitizeQuery(text) || text);
             if (rows && rows.length) ref = rows.map(function (x, i) {
               return (i + 1) + '. ' + (x.title || '') + (x.snippet ? '：' + x.snippet : '');
             }).join('\n');
@@ -1249,6 +1372,22 @@ function botLeader(conv) {
 }
 // 判断某条消息是否需要小美接话：只有「被 @」或「私聊小美」才回
 // ⚠️ 已移除「6 秒无人回复则兜底代发」逻辑：那是小美的主动行为，且多端在线时会重复发言
+// ⚠️⚠️ 必须按消息 id 去重：同一条消息可能被两条路径触发 ——
+//   ① sendMsg 本地立即调一次；② tick() 轮询把我自己发的消息拉回来再调一次
+//   （tick 的 `gt('id', S.lastId)` 查询在 Promise.all 发出时 lastId 还是旧值，
+//    回来时 S.lastId 未必已推进 → 同一条消息进 onNew 两次）
+//   曾因此「@小美 上海天气」一条消息回了两次天气（相隔 29 秒）。同源还导致
+//   ensureLLM 并发竞态 → 第二次秒回「卡了一下」。
+var BOT_REPLIED = {};   // { conv|msgId: ts }，只做去重标记，定期清理
+function botDedupe(conv, id) {
+  if (id == null) return true;   // 没有 id 的消息（本地乐观插入）不去重
+  var key = conv + '|' + id;
+  if (BOT_REPLIED[key]) return false;
+  BOT_REPLIED[key] = Date.now();
+  var cut = Date.now() - 10 * 60 * 1000;
+  for (var k in BOT_REPLIED) { if (BOT_REPLIED[k] < cut) delete BOT_REPLIED[k]; }
+  return true;
+}
 function maybeBotReply(m) {
   if (!m || !m.conv || m.sender_id === BOT.id) return;
   var c = cm()[m.conv];
@@ -1256,6 +1395,7 @@ function maybeBotReply(m) {
   var isBotChat = c.type === 'private' && c.id === BOT.id;
   var atBot = (m.mentions || []).indexOf(BOT.id) >= 0;
   if (!isBotChat && !atBot) return;
+  if (!botDedupe(m.conv, m.id)) return;   // 同一条消息只回一次
   var who = m.sender_name || ((S.profiles[m.sender_id] || {}).nickname || '');
   if (!botLeader(m.conv)) return;   // 多端在线时只让 leader 回复，避免人人代发
   botReply(m.conv, m.text, who);
@@ -3055,6 +3195,11 @@ window.LT = {
   searchNeed: function (t) { return botSearchNeed(t); },
   searchWeb: function (q) { return searchWeb(q); },
   botSearch: function (t, who) { return botSearch(t, who); },
+  // 供测试断言天气地名解析 / 检索词清洗（从宿主模块抽出的纯函数）
+  parseCity: function (t) { return parseCity(t); },
+  sanitizeQuery: function (t) { return sanitizeQuery(t); },
+  botNews: function () { return botNews(); },
+  botHot: function () { return botHot(); },
   // 供测试断言 Jev 意图路由
   get INTENT() { return INTENT; },
   intentProbe: function () { return intentProbe(); },

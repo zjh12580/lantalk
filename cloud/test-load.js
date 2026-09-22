@@ -692,7 +692,13 @@ function makeStub() {
       // 云上 DeepSeek 全是 onlyReasoning 推理模型：不能硬传 temperature，超时也要放宽
       log(!/stream:\s*true,\s*temperature:/.test(src), '不硬传 temperature（推理模型采样参数锁定，传了可能被拒）');
       const to = src.match(/var LLM_TIMEOUT = (\d+)/);
-      log(!!to && Number(to[1]) >= 40000, 'LLM_TIMEOUT ≥ 40s（适配推理模型首字延迟）', to ? to[1] + 's' : 'none');
+      // ⚠️ 30s 是有意的：botLLM 现在有「多模型回退链」（llmQueue × 带/不带温度），
+      //    单模型 30s 超时后会自动换下一个重试，总预算仍 < botHoldTyping 的 60s。
+      //    35s 以上反而会让「换模型重试」没机会执行就到 60s 预算上限。
+      log(!!to && Number(to[1]) >= 25000 && Number(to[1]) <= 45000,
+        'LLM_TIMEOUT 在 25~45s 区间（配合多模型回退链）', to ? to[1] + 's' : 'none');
+      // 回退链存在
+      log(/LLM_RETRY/.test(src) && /S\.llmQueue/.test(src), 'botLLM 有候选模型回退链（llmQueue + LLM_RETRY）');
       // 注意：源码里有两处 botTypingUntil（普通回复 1.5s / AI 长等待 60s），
       // 要取「AI 长等待」那个最大值，否则会误配到 1.5s
       const holds = Array.from(src.matchAll(/S\.botTypingUntil = Date\.now\(\) \+ (\d+)/g)).map((m) => Number(m[1]));
@@ -715,7 +721,7 @@ function makeStub() {
       log(__llmListCalls === 1, '拉取模型目录 1 次', __llmListCalls);
       // 幂等：再调一次不应重复拉目录
       await LT.ensureLLM();
-      log(__llmListCalls === 1, 'ensureLLM 幂等（llmTried 生效，不重复拉目录）', __llmListCalls);
+      log(__llmListCalls === 1, 'ensureLLM 幂等（llmReady 缓存 Promise 生效，不重复拉目录）', __llmListCalls);
     } else {
       log(false, 'window.LT.ensureLLM 已导出', LT ? Object.keys(LT).join(',') : 'no LT');
     }
@@ -725,7 +731,9 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = saved.map((m) => (m.id === 'deepseek-v4.1-flash' ? { id: m.id, name: m.name, disabled: true } : m));
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        // ⚠️ 重置状态必须清「缓存的 Promise」而不是旧的 llmTried 布尔标志
+        //    （ensureLLM 已改为缓存 Promise 修并发竞态；只清 llmTried 会导致复用旧 Promise）
+        LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'deepseek-v4-flash', '首选被 disabled → 跳到次选', String(LT.S.llmModel));
       }
@@ -737,7 +745,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: true }];
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'glm-5.3', '目录无 deepseek → 兜底任意可用模型', String(LT.S.llmModel));
       }
@@ -1615,6 +1623,77 @@ function makeStub() {
     // 源码断言：闲聊分支确实先走意图路由
     const src3 = html;
     log(/await tryIntentAutoReply\(text, conv\)/.test(src3), 'botReply 闲聊分支前置调用 tryIntentAutoReply');
+  }
+
+  // ===== 小美回归修复（在 dev 单文件版上重新移植）：地名解析 / 并发竞态 / 联网问答 / 新闻兜底 / 去重 =====
+  {
+    const LT = w.LT;
+    const srcAll = html;   // 单文件版：index.html 即全部源码
+    // ⚠️ 扫源码前只剥「行首 // 注释」：注释里可能写着被禁用的旧标识，会反噬断言（踩过）
+    // ⚠️⚠️ 两条禁令，都是踩出来的：
+    //   1) 别用 /\/\/[^\n]*/g —— 会把字符串 'https://...' 里的 // 到行尾整段删掉，含 URL 的断言全假失败
+    //   2) 别剥块注释 /\/\*[\s\S]*?\*\//g —— HTML 里 /* 与 */ 数量不配对（正则字面量/字符串里有 */），
+    //      非贪婪跨段匹配会一次吞掉 7 万+ 字符，扫源码断言集体失灵
+    const code = srcAll.split('\n').map(function (l) { return l.replace(/^\s*\/\/.*$/, ''); }).join('\n');
+
+    // 1) 天气地名解析：时间词/动词/语气词双向剥离（真因：原正则把「明天上海」整段当地名）
+    if (LT && LT.parseCity) {
+      [['明天上海天气', '上海'], ['今天北京天气', '北京'], ['上海天气', '上海'],
+       ['帮我查一下 深圳 天气', '深圳'], ['广州今天多少度', '广州'], ['明天上海会不会下雨', '上海']]
+        .forEach(function (c) {
+          const hit = LT.parseCity(c[0]);
+          log(hit === c[1], '天气解析「' + c[0] + '」→ ' + c[1], '实际=' + hit);
+        });
+    } else log(false, 'window.LT.parseCity 已导出');
+
+    // 2) ⚠️⚠️ 真凶回归：ensureLLM 缓存 Promise 而非布尔标志（修并发竞态）
+    log(!/S\.llmTried/.test(code) && /if \(S\.llmReady\) \{ await S\.llmReady; return; \}/.test(code),
+      'ensureLLM 缓存 Promise 而非布尔值（修并发竞态：曾致 1 秒秒回「卡了一下」+ 天气回两次）',
+      /S\.llmTried/.test(code) ? '代码里还有 llmTried' : 'ok');
+    if (LT && LT.ensureLLM) {
+      const savedR = LT.S.llmReady, savedM = LT.S.llmModel, savedQ = LT.S.llmQueue;
+      LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
+      const callsBefore = __llmListCalls;
+      const p1 = LT.ensureLLM(), p2 = LT.ensureLLM();
+      await Promise.all([p1, p2]);
+      log(LT.S.llmModel === 'deepseek-v4.1-flash',
+        '并发两次 ensureLLM：await 后模型已就绪（不会秒回兜底）', String(LT.S.llmModel));
+      log(__llmListCalls - callsBefore <= 1, '并发调用不重复拉模型目录',
+        'delta=' + (__llmListCalls - callsBefore));
+      log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue.length >= 2,
+        '候选模型队列含多个（保证有回退目标）', Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.length : 0);
+      LT.S.llmReady = savedR; LT.S.llmModel = savedM; LT.S.llmQueue = savedQ;
+    }
+
+    // 3) 天气主流程已改用 parseCity（不再用内联正则）
+    log(/var city = parseCity\(text\)/.test(code), 'botWeather 改用 parseCity 解析地名');
+
+    // 4) 新闻源换血 + 联网兜底（原三源实测 curl 000 全挂）
+    log(/60s-api\.viki\.moe/.test(code), 'NEWS_SOURCES 首位换成 viki.moe（原三源已失效）');
+    log(/function botNewsFallback/.test(code), '新闻/热点失败时走联网检索+模型总结兜底');
+    log(!/新闻源今天集体打不通了/.test(code), '已删除「新闻源今天集体打不通了」的硬报错文案');
+
+    // 5) lookup 强制联网 + sanitizeQuery 清洗检索词
+    log(/var LOOKUP_RE = /.test(code), '新增 LOOKUP_RE（教程/怎么用/文档/命令/解释/总结类表达）');
+    log(/LOOKUP_RE\.test\(t\)\) \{ S\.lookupAt = /.test(code), 'botAnswer 命中 LOOKUP_RE 时标记强制联网（排在 return null 之前）');
+    log(/var lookupForced = false/.test(code) && /lookupForced \|\| botSearchNeed\(text\)/.test(code),
+      'botReply 读到 lookup 标记后强制检索（不依赖 searchNeed 启发式）');
+    if (LT && LT.sanitizeQuery) {
+      log(LT.sanitizeQuery('@小美 查一下 HTTP 状态码') === 'HTTP 状态码',
+        'sanitizeQuery 剥掉指令词，只留检索关键词', LT.sanitizeQuery('@小美 查一下 HTTP 状态码'));
+      log(LT.sanitizeQuery('麻烦你帮我查一下 tar 怎么用') === 'tar 怎么用',
+        'sanitizeQuery 支持叠加前缀（麻烦你+帮我+查一下）', LT.sanitizeQuery('麻烦你帮我查一下 tar 怎么用'));
+      log(/searchWeb\(sanitizeQuery\(text\) \|\| text\)/.test(code), 'botReply 用 sanitizeQuery 清洗后再检索');
+    } else log(false, 'window.LT.sanitizeQuery 已导出');
+
+    // 6) 回复去重：同一条消息只回一次（治「天气回两次」的另一半）
+    log(/var BOT_REPLIED = \{\}/.test(code) && /function botDedupe/.test(code),
+      'maybeBotReply 增加按消息 id 去重（BOT_REPLIED + botDedupe）');
+    log(/if \(!botDedupe\(m\.conv, m\.id\)\) return;/.test(code), 'maybeBotReply 在调用 botReply 前做去重守卫');
+
+    // 7) 多模型回退链
+    log(/LLM_RETRY/.test(code) && /S\.llmQueue\.slice\(\)/.test(code),
+      'botLLM 有候选模型回退链（模型 × 带/不带 temperature）');
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));

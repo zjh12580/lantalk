@@ -388,8 +388,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (require.main === module) {
-  server.listen(PORT, () => {
-    console.log('[cloud] listening on :' + PORT + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)') + '  model=' + MODEL);
+  // ⚠️ 必须绑 0.0.0.0：部署环境通过反向代理访问单端口，只绑 localhost 会导致外部连不上
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('[cloud] listening on 0.0.0.0:' + PORT + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)') + '  model=' + MODEL);
   });
 }
 module.exports = { server, QUESTIONS, shapeAnswer, ANALYZE_QUESTIONS, shapeAnalyze };
