@@ -32,16 +32,54 @@ function builder(table) {
   let ord = null;
   let lim = null;
   let pendingOp = null; // 'update' | 'delete'，惰性：在 .then() 时（filters 补全后）才执行
+  // 统一的过滤求值：真实 SDK 的每个过滤器都是 (列, 值, 运算符)，桩里保持一致
+  const keep = (r, f) => {
+    const col = r[f[0]];
+    switch (f[2]) {
+      case '=': return String(col) === String(f[1]);
+      case '!=': return String(col) !== String(f[1]);
+      case '>': return Number(col) > Number(f[1]);
+      case '>=': return Number(col) >= Number(f[1]);
+      case '<': return Number(col) < Number(f[1]);
+      case '<=': return Number(col) <= Number(f[1]);
+      case 'in': return (f[1] || []).some((v) => String(col) === String(v));
+      case 'nin': return !(f[1] || []).some((v) => String(col) === String(v));
+      // is() 按 SQL 语义：与 null / undefined 比较，不能用 !!v 折叠，
+      // 否则 .is(col, null) 会被误判成「非空」（踩过）
+      case 'isnull': return f[1] ? f[1](col) : false;
+      default: throw new Error('[test stub] 未实现的过滤运算符: ' + f[2] + '（列 ' + f[0] + '）');
+    }
+  };
   const matchRows = () => {
     let rows = (DATA[table] || []).slice();
-    filters.forEach((f) => { rows = rows.filter((r) => String(r[f[0]]) === String(f[1])); });
+    filters.forEach((f) => { rows = rows.filter((r) => keep(r, f)); });
     return rows;
   };
   const b = {
     select() { return b; },
     eq(c, v) { filters.push([c, v, '=']); return b; },
+    neq(c, v) { filters.push([c, v, '!=']); return b; },
     gt(c, v) { filters.push([c, v, '>']); return b; },
+    gte(c, v) { filters.push([c, v, '>=']); return b; },
     lt(c, v) { filters.push([c, v, '<']); return b; },
+    lte(c, v) { filters.push([c, v, '<=']); return b; },
+    // ⚠️ in() 曾经缺失，链到它就会抛 TypeError 而不是给出结果。
+    //    补上它是为了不让「桩缺方法」被误当成「产品有问题」——之前就踩过这个坑。
+    in(c, v) { filters.push([c, (v || []).slice(), 'in']); return b; },
+    not(c, op, v) {
+      // .not('col', 'in', [...]) / .not('col', 'is', null)
+      const opMap = { in: 'nin', eq: '!=', is: 'isnot' };
+      const mapped = opMap[op];
+      if (!mapped) throw new Error('[test stub] 未实现的 not() 运算符: ' + op);
+      filters.push([c, v, mapped]);
+      return b;
+    },
+    is(c, v) {
+      if (v === null || v === undefined || v === true) filters.push([c, (x) => x === null || x === undefined, 'isnull']);
+      else filters.push([c, (x) => x !== null && x !== undefined, 'isnull']);
+      return b;
+    },
+    like() { return b; },
     ilike() { return b; },
     order(c, o) { ord = [c, (o && o.ascending === false) ? -1 : 1]; return b; },
     limit(n) { lim = n; return b; },
@@ -92,18 +130,36 @@ function builder(table) {
       }
       let rows = res !== null ? res.slice() : (DATA[table] || []).slice();
       if (res === null) {
-        filters.forEach(function (f) {
-          if (f[2] === '=') rows = rows.filter((r) => String(r[f[0]]) === String(f[1]));
-          else if (f[2] === '>') rows = rows.filter((r) => Number(r[f[0]]) > Number(f[1]));
-          else rows = rows.filter((r) => Number(r[f[0]]) < Number(f[1]));
-        });
+        filters.forEach(function (f) { rows = rows.filter((r) => keep(r, f)); });
       }
       if (ord) rows.sort((x, y) => (x[ord[0]] > y[ord[0]] ? ord[1] : x[ord[0]] < y[ord[0]] ? -ord[1] : 0));
       if (lim && rows.length > lim) rows = ord && ord[1] === -1 ? rows.slice(0, lim) : rows.slice(-lim);
       return Promise.resolve({ data: rows, error: null }).then(fn);
     },
   };
-  return b;
+  // 未知方法：立刻抛错，而不是静默返回 undefined。
+  // 静默失败会让「桩缺 in()」表现为「页面拿到 undefined 后崩在别处」，
+  // 排查时很容易误判成产品 bug —— 这一层保护就是为了让缺口自己喊出来。
+  // 注意：链式方法必须返回 proxy 本身，返回原始 b 会让后续调用绕过拦截。
+  const methods = new Set(Object.keys(b));
+  const proxy = new Proxy(b, {
+    get(t, k) {
+      if (typeof k === 'symbol') return t[k];
+      if (!methods.has(k)) {
+        // then/catch/finally 返回 undefined，保证 Promise 判定与 await 语义正确
+        if (k === 'then' || k === 'catch' || k === 'finally') return undefined;
+        throw new Error('[test stub] 表 ' + table + ' 上没有实现方法 .' + String(k) + '()');
+      }
+      const v = t[k];
+      if (typeof v !== 'function') return v;
+      // 链式方法一律回传 proxy，让「未实现方法」在任意一环都能被拦到
+      return (...args) => {
+        const r = v.apply(t, args);
+        return r === b ? proxy : r;
+      };
+    },
+  });
+  return proxy;
 }
 ['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live', 'games'].forEach((t) => { TABLE[t] = () => builder(t); });
 
