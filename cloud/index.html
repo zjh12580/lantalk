@@ -1110,36 +1110,31 @@ function sanitizeQuery(text) {
 // 联网问答意图（教程/文档/命令/解释/总结…）：用户明确要求上网查 → 强制检索，不靠启发式猜
 // ⚠️ 必须排在最终闲聊兜底（return null）之前，否则这些表达会全被当闲聊吞掉（踩过：
 //    用户反馈「不能联网查技能」就是这个原因）
-var LOOKUP_RE = /查一下|查查|帮我查|搜一下|搜搜|搜索|上网查|百度|谷歌|google|找一下|找找|查找|搜|教程|怎么用|怎么使用|如何使用|怎么|如何|用法|文档|手册|命令|指令|语法|示例|例子|总结一下|总结|汇总|资料|百科|解释一下|解释|介绍一下|介绍|科普|是什么|什么是|为什么/;
+// 联网问答意图已废弃：改为服务端 Agent 自主判断要不要联网（不再靠本地正则猜）。
+// 残留的 sanitizeQuery / botSearchNeed 仅服务于「旧链路兜底」，此处不再定义 LOOKUP_RE。
+// ---------- 小美回复分发 ----------
+// ⚠️ 架构变更（智能体重构）：本地只保留「确定性技能」的直连 —— 表情/卡片/菜单这类
+//    必须零延迟且不依赖模型的动作。**其余一切自然语言都交给服务端 Agent 理解**，
+//    不再用一堆 `if (/笑话|段子/)` 正则去猜用户想干什么（那是「理解能力差」的根因）。
+var BOT_MENU = '我可以陪你聊天、帮你查资料、看天气、聊股票行情～\n直接跟我说话就行，不用记指令 🌸';
 function botAnswer(text, who, conv) {
   var t = String(text || '').replace(/@小美/g, '').replace(/\s+/g, ' ').trim();
-  // 技能菜单：你可以干什么 / 帮助
-  if (/你能干什么|你会什么|你都会|会干啥|你会啥|能干啥|什么技能|技能|菜单|帮助|怎么玩|help/i.test(t)) {
+  if (!t) return botPick(BOT_LINES);
+  // 长期记忆的「记住 / 忘掉」是指令式操作，必须确定性执行（不能靠模型自由发挥）
+  var mRem = t.match(/^(?:请|帮我)?\s*记住[\s:：,，]*(.+)$/);
+  if (mRem && mRem[1]) { memAdd(mRem[1]); return '好，我记住了：' + mRem[1].slice(0, 60) + ' 📌'; }
+  var mForget = t.match(/^(?:请|帮我)?\s*忘掉[\s:：,，]*(.*)$/);
+  if (mForget) {
+    var n = memDel(mForget[1]);
+    return n > 0 ? ('好，我忘掉 ' + n + ' 条了 🧹') : (mForget[1] ? '我没找到相关的记忆诶 🤔' : '好，我把之前记的都清空了 🧹');
+  }
+  // 仅保留一条：明确的「能力菜单」提问（这是产品级的固定回答，不需要模型）
+  if (/^(你能干什么|你会什么|你都会|会干啥|你会啥|能干啥|什么技能|技能|菜单|帮助|怎么玩|help)[\?？!！。]*$/i.test(t)) {
     if (conv) S.botMenuAt[conv] = Date.now();
     return BOT_MENU;
   }
-  // 菜单序号直选（5 分钟内展示过菜单才生效，避免误伤正常聊天里的数字）
-  if (conv && Date.now() - (S.botMenuAt[conv] || 0) < 5 * 60 * 1000 && /^[1-6]$/.test(t)) {
-    return botSkill(+t, '', who);
-  }
-  // 直接触发词
-  if (/笑话|段子|逗我|冷知识/.test(t)) return botJoke();
-  if (/故事|讲个故事|睡前故事/.test(t)) return botStory();
-  if (/古诗|念诗|来首诗|背首诗|一句诗/.test(t)) return botPoem();
-  if (/新闻|日报|60秒|60秒|看报/.test(t)) return botNews();
-  if (/热点|热搜|头条|大事|瓜/.test(t)) return botHot();
-  if (/天气|气温|温度|下雨|下雪|多少度|穿什么/.test(t)) return botWeather(t, who);
-  for (var i = 0; i < BOT_KEY.length; i++) {
-    if (BOT_KEY[i].k.test(t)) return botPick(BOT_KEY[i].r);
-  }
-  if (!t) return botPick(BOT_LINES);
-  // 联网问答意图（教程/怎么用/文档/命令/解释/总结/什么是…）：标记为强制联网，交给 botReply 检索+模型综合
-  // ⚠️ 必须排在 return null 之前 —— 否则这些表达会被当闲聊，模型凭记忆瞎答或答不上来
-  //    也不能直接 return botSearch()（那只给检索原文、不给模型综合，体验差）
-  if (LOOKUP_RE.test(t)) { S.lookupAt = { conv: conv, at: Date.now() }; return null; }
-  // 未命中关键词 → 需要事实性回答的，先联网检索（走手工 RAG）
-  if (botSearchNeed(t)) return botSearch(t, who);
-  return null;   // 闲聊类 → 交给 DeepSeek（由 botReply 决定走 AI 还是旧兜底）
+  // 其余全部交给 Agent（botReply 里调 /api/chat）——包括笑话/故事/诗词/新闻/天气/闲聊/问答
+  return null;
 }
 // 小美说话：直接以机器人身份插库（云端没有服务端进程，只能客户端代发）
 function botSay(conv, text) {
@@ -1265,11 +1260,144 @@ async function ensureLLM() {
   })();
   await S.llmReady;
 }
+// ---------- 小美智能体（服务端 Agent 主循环）----------
+// 架构：前端只负责「把用户的话 + 上下文 + 记忆 + 情绪」发给 /api/chat，
+//       服务端跑真正的 Agent —— 大模型自主理解、自主决定要不要联网/调工具，
+//       最多 3 轮工具调用后收敛出最终回答。
+// 为什么放服务端：联网检索不受 CORS 限制、密钥不出服务端、可用 Node 原生能力。
+var AGENT_STATE = { enabled: null, primary: null };   // null=未探测
+function agentProbe() {
+  return fetch('/api/chat', { method: 'GET' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      AGENT_STATE.enabled = !!(j && j.ok && j.enabled);
+      AGENT_STATE.primary = (j && j.primary) || null;
+      if (AGENT_STATE.enabled) console.log('[agent] 小美智能体已启用，主模型 ' + AGENT_STATE.primary);
+      return AGENT_STATE.enabled;
+    })
+    .catch(function () { AGENT_STATE.enabled = false; return false; });
+}
+// 组装发给 Agent 的上下文（「上下文理解」的核心 —— 让模型知道谁在跟谁说话）
+// 三条要点：
+//   ① 群聊里必须带发言人标注，否则模型分不清「我」「别人」「自己」说的话
+//   ② 小美自己的历史回复标成 assistant（模型才知道那是「我说的」）
+//   ③ 带上会话场景（群聊名 + 参与人），模型才能选对语气
+var AGENT_CTX_N = 16;   // 上下文条数（比 10 条更能感知话题走向）
+function agentHistory(conv) {
+  var c = cm()[conv] || {};
+  var isGroup = c.type === 'group';
+  var selfName = (S.me && S.me.nickname) || '';
+  return (S.msgs[conv] || []).filter(function (m) {
+    return m && m.type === 'text' && m.text && !m.revoked;
+  }).slice(-AGENT_CTX_N).map(function (m) {
+    var isBot = m.sender_id === BOT.id;
+    var isSelf = m.sender_id === S.uid;
+    var name = isBot ? BOT.name : (m.sender_name || '有人');
+    if (isGroup) {
+      // 群聊：如实带发言人，让模型理解多方对话
+      return {
+        role: isBot ? 'assistant' : 'user',
+        content: (isBot ? '' : name + '：') + String(m.text),
+      };
+    }
+    // 私聊：小美 ↔ 对方。自己的话也要标出，模型才知道是谁说的
+    return {
+      role: isBot ? 'assistant' : 'user',
+      content: (isSelf ? selfName + '：' : '') + String(m.text),
+    };
+  });
+}
+// 会话场景描述（喂给 System Prompt，让模型知道自己在哪个群里、跟谁说话）
+function agentScene(conv, who) {
+  var c = cm()[conv] || {};
+  var isGroup = c.type === 'group';
+  var p = S.profiles[S.uid] || {};
+  if (!isGroup) return { kind: 'private', text: '你正在和「' + (who || '朋友') + '」私聊。' };
+  var ids = (S.members[c.id] || []).filter(function (u) { return u !== BOT.id; });
+  var names = ids.map(function (u) {
+    if (u === S.uid) return (p.nickname || '你') + '（本人）';
+    return (S.profiles[u] || {}).nickname || '有人';
+  }).filter(Boolean);
+  var uniq = names.filter(function (n, i) { return names.indexOf(n) === i; });
+  return {
+    kind: 'group',
+    text: '你正在群聊「' + (c.name || '群聊') + '」里，当前发言的是「' + (who || '有人') + '」。'
+      + (uniq.length ? '群里还有：' + uniq.slice(0, 12).join('、') + '。' : '')
+      + '注意分辨每句话是谁说的，回复时称呼要准确。',
+  };
+}
+// 小美情绪（供 System Prompt 自然流露）
+function botMoodNow() {
+  try { return (window.LT_BOT && LT_BOT.moodNow) ? LT_BOT.moodNow() : null; } catch (e) { return null; }
+}
+// 长期记忆：本地持久化（localStorage），让 Agent 跨会话记得住用户说过的事。
+// 触发方式：用户说「记住：xxx」→ 存下；说「忘掉 xxx」→ 删除。也可由模型主动记忆。
+var MEM_KEY = 'lt_botMem_v1';
+var MEM_MAX = 40;
+function memLoad() {
+  if (S.botMem && S.botMem.length) return S.botMem;
+  try {
+    var raw = localStorage.getItem(MEM_KEY);
+    S.botMem = raw ? (JSON.parse(raw) || []) : [];
+  } catch (e) { S.botMem = []; }
+  return S.botMem;
+}
+function memSave() {
+  try { localStorage.setItem(MEM_KEY, JSON.stringify((S.botMem || []).slice(-MEM_MAX))); } catch (e) {}
+}
+function memAdd(content) {
+  var c = String(content || '').trim().slice(0, 200);
+  if (!c) return;
+  memLoad();
+  if (S.botMem.some(function (m) { return m.content === c; })) return;   // 去重
+  S.botMem.push({ content: c, at: Date.now() });
+  S.botMem = S.botMem.slice(-MEM_MAX);
+  memSave();
+}
+function memDel(kw) {
+  memLoad();
+  var k = String(kw || '').trim();
+  if (!k) { S.botMem = []; memSave(); return 0; }
+  var before = S.botMem.length;
+  S.botMem = S.botMem.filter(function (m) { return String(m.content || '').indexOf(k) < 0; });
+  memSave();
+  return before - S.botMem.length;
+}
+// 长期记忆摘要（喂给 Agent 的 System Prompt）
+function botMemoryText() {
+  try {
+    var mem = memLoad();
+    if (!mem.length) return '';
+    return mem.slice(-12).map(function (m) { return '· ' + String(m.content || '').slice(0, 120); }).join('\n');
+  } catch (e) { return ''; }
+}
+/**
+ * 调服务端 Agent。成功返回 {ok:true, text}；失败返回 {ok:false}（调用方走旧链路兜底）。
+ */
+function botAgent(text, who, conv) {
+  if (AGENT_STATE.enabled === false) return Promise.resolve({ ok: false, reason: 'disabled' });
+  var scene = agentScene(conv, who);
+  var body = {
+    text: text,
+    who: who || '朋友',
+    scene: scene,
+    mood: botMoodNow(),
+    memory: botMemoryText(),
+    history: agentHistory(conv),
+  };
+  return fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(function (r) { return r.json(); }).then(function (j) {
+    if (j && j.ok && j.text) return { ok: true, text: String(j.text), trace: j.trace || [], turns: j.turns };
+    return { ok: false, reason: (j && j.reason) || 'unknown', detail: j && j.detail };
+  }).catch(function (e) { return { ok: false, reason: 'network', detail: String(e.message || e) }; });
+}
 // 调 DeepSeek 生成回复（收集流式输出，复用会话最近若干条历史做上下文）
 // ref：可选的联网检索结果（手工 RAG），拼进 system 提示，让小美基于事实回答而不是凭记忆瞎编
 // ⚠️ 多模型回退链：首选模型超时/被拒时自动换下一个，而不是直接扔「卡了一下」
-var LLM_RETRY = 2;
-async function botLLM(text, who, conv, ref) {
+var LLM_RETRY = 2;async function botLLM(text, who, conv, ref) {
   if (!CLOUD.llm || !CLOUD.llm.chat || !CLOUD.llm.chat.completions) throw new Error('llm unavailable');
   if (!S.llmModel) throw new Error('no model');
   var sys = '你是「小美」，一个中文聊天室里的活泼 AI 助手。语气轻松亲切，像朋友聊天；'
@@ -1361,9 +1489,19 @@ function botReply(conv, text, who) {
     }
     botHoldTyping(conv);
     (async function () {
+      // ① 预置功能（股票/行情/天气卡片/#分析）—— 命中就直接出卡片，不必劳烦大模型
       try {
         if (await tryIntentAutoReply(text, conv)) { botStopTyping(); return; }
       } catch (e) {}
+      // ② 智能体主通道：服务端 Agent 自主理解 + 自主联网/调工具
+      try {
+        var ag = await botAgent(text, who, conv);
+        if (ag && ag.ok && ag.text) {
+          botStopTyping();
+          return botSay(conv, ag.text);
+        }
+      } catch (e) {}
+      // ③ 回退：旧链路（云端网关 + 手工 RAG），保障 Agent 不可用时仍能应答
       await ensureLLM();
       var out;
       if (S.llmModel) {
@@ -3287,10 +3425,17 @@ window.LT = {
   jevIntent: function (t, c) { return jevIntent(t, c); },
   stockGuess: function (t) { return stockGuess(t); },
   tryIntentAutoReply: function (t, c) { return tryIntentAutoReply(t, c); },
+  // 供测试断言小美智能体（服务端 Agent）链路
+  get AGENT_STATE() { return AGENT_STATE; },
+  agentProbe: function () { return agentProbe(); },
+  botAgent: function (t, w0, c) { return botAgent(t, w0, c); },
+  botAnswer: function (t, w0, c) { return botAnswer(t, w0, c); },
 };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
 // 启动后探测意图路由能力（服务端未配置密钥时保持关闭，行为与之前完全一致）
 setTimeout(intentProbe, 200);
+// 探测小美智能体（服务端 Agent）是否可用 —— 可用则走 Agent 主通道，否则回退旧链路
+setTimeout(function () { agentProbe(); }, 300);
 function promptBox(title, val, ta, onOk) {
   openModal('<h3>' + esc(title) + '</h3>'
     + (ta ? '<textarea class="inp" id="pb" rows="4" style="resize:vertical">' + esc(val) + '</textarea>' : '<input class="inp" id="pb" value="' + esc(val) + '">')

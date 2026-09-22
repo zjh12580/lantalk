@@ -117,6 +117,9 @@ let __searchOk = true;         // 检索源是否可用（false 时全部拒绝�
 let __intentOn = true;         // Jev 意图路由是否可用（服务端是否配了密钥）
 let __intentResp = null;       // 下一次 /api/intent 的返回（null 时用默认闲聊结果）
 let __intentCalls = [];        // /api/intent 请求记录
+let __agentOn = true;          // 小美智能体（/api/chat）是否可用
+let __agentCalls = [];         // /api/chat 请求记录
+let __agentResp = null;        // 自定义 /api/chat 返回（函数：(body) => obj）
 // Keyless LLM 网关桩状态：默认给出与云上一致的目录（含 4 个 deepseek 候选）
 let __llmListCalls = 0;
 let __llmListFail = false;
@@ -263,6 +266,17 @@ function makeStub() {
           }
           __intentCalls.push(JSON.parse((o && o.body) || '{}'));
           const r = __intentResp || { ok: true, intent: 'chitchat', confidence: 0.4, intent_confidence: 0.9, kind: 'none', has_asset: 0.05, crypto: '', crypto_confidence: 0 };
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(r) });
+        }
+        // 小美智能体（服务端 Agent）：GET 探活 + POST 主循环
+        if (url.indexOf('/api/chat') >= 0) {
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, enabled: __agentOn, primary: __agentOn ? 'deepseek-flash' : null, fallback: null }) });
+          }
+          __agentCalls.push(JSON.parse((o && o.body) || '{}'));
+          if (!__agentOn) return Promise.reject(new Error('agent down'));
+          const r = __agentResp ? __agentResp(JSON.parse((o && o.body) || '{}'))
+            : { ok: true, text: '（智能体回复）', trace: [], turns: 1, channel: 'deepseek' };
           return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(r) });
         }
         return Promise.reject(new Error('no network in test'));
@@ -713,7 +727,8 @@ function makeStub() {
     //    但必须精确命中优先级最高的 deepseek-v4.1-flash（不是列表第一个）
     await sleep(300);
     if (LT && LT.ensureLLM) {
-      LT.S.llmTried = false; LT.S.llmModel = null;
+      // ⚠️ 重置必须用 llmReady（Promise 缓存），旧的 llmTried 布尔字段已废弃 —— 改它无效
+      LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
       __llmListCalls = 0;
       await LT.ensureLLM();
       log(LT.S.llmModel === 'deepseek-v4.1-flash',
@@ -1269,19 +1284,17 @@ function makeStub() {
     const arr = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei');
     return arr.length > n0 ? arr[arr.length - 1].text : '(无回复)';
   }
-  const tJoke = await botTalk('@小美 讲个笑话');
-  log(tJoke.length > 10, '「讲个笑话」有回复', tJoke.slice(0, 30));
+    const tJoke = await botTalk('@小美 讲个笑话');
+    log(tJoke.length > 3 && tJoke !== '(无回复)', '「讲个笑话」有回复（走智能体）', tJoke.slice(0, 30));
   const tMenu = await botTalk('@小美 你能干什么');
-  log(tMenu.indexOf('笑话') >= 0 && tMenu.indexOf('古诗') >= 0 && tMenu.indexOf('天气') >= 0,
-    '问「你能干什么」输出技能菜单（带 6 个序号技能）', tMenu.slice(0, 40).replace(/\n/g, ' '));
-  const tNum = await botTalk('@小美 2');
-  log(tNum.length > 20 && tNum !== '(无回复)', '菜单后直接回复序号 2 -> 触发讲故事', tNum.slice(0, 30));
+  log(tMenu.indexOf('聊天') >= 0 || tMenu.indexOf('查资料') >= 0,
+    '问「你能干什么」给出能力说明', tMenu.slice(0, 40).replace(/\n/g, ' '));
   const tPoem = await botTalk('@小美 来首古诗');
-  log(tPoem.indexOf('《') >= 0, '「来首古诗」返回古诗（带书名号标题）', tPoem.slice(0, 24));
+  log(tPoem.length > 5 && tPoem !== '(无回复)', '「来首古诗」有回复（智能体生成，不再本地抽签）', tPoem.slice(0, 24));
   const tW = await botTalk('@小美 北京天气', 3200);
-  log(tW.indexOf('°C') >= 0 && tW.indexOf('北京') >= 0, '「北京天气」返回 open-meteo 真实天气', tW.slice(0, 40).replace(/\n/g, ' '));
+  log(tW.length > 3 && tW !== '(无回复)', '「北京天气」有回复', tW.slice(0, 40).replace(/\n/g, ' '));
   const tN = await botTalk('@小美 看看新闻', 3600);
-  log(tN.indexOf('新闻') >= 0, '「看新闻」有响应（测试环境源全挂 -> 走降级文案）', tN.slice(0, 36).replace(/\n/g, ' '));
+  log(tN.length > 3 && tN !== '(无回复)', '「看新闻」有响应', tN.slice(0, 36).replace(/\n/g, ' '));
 
   // ===== 本轮：手机端侧栏 ☰ / 遮罩 =====
   log(D.querySelector('#bSide') !== null, '侧栏 ☰ 展开按钮存在（窄屏下显示）');
@@ -1672,17 +1685,21 @@ function makeStub() {
     log(/function botNewsFallback/.test(code), '新闻/热点失败时走联网检索+模型总结兜底');
     log(!/新闻源今天集体打不通了/.test(code), '已删除「新闻源今天集体打不通了」的硬报错文案');
 
-    // 5) lookup 强制联网 + sanitizeQuery 清洗检索词
-    log(/var LOOKUP_RE = /.test(code), '新增 LOOKUP_RE（教程/怎么用/文档/命令/解释/总结类表达）');
-    log(/LOOKUP_RE\.test\(t\)\) \{ S\.lookupAt = /.test(code), 'botAnswer 命中 LOOKUP_RE 时标记强制联网（排在 return null 之前）');
-    log(/var lookupForced = false/.test(code) && /lookupForced \|\| botSearchNeed\(text\)/.test(code),
-      'botReply 读到 lookup 标记后强制检索（不依赖 searchNeed 启发式）');
+    // 5) 智能体重构：本地正则路由已移除，自然语言全部交给服务端 Agent
+    log(!/var LOOKUP_RE = /.test(code), 'LOOKUP_RE 已移除（不再靠正则猜「要联网」）');
+    log(/function botAgent\(/.test(code) && /\/api\/chat/.test(code),
+      '新增 botAgent：把自然语言交给服务端 Agent 理解');
+    log(/var AGENT_STATE = \{/.test(code) && /function agentProbe\(/.test(code),
+      '新增 AGENT_STATE + agentProbe（启动探测智能体可用性）');
+    log(/return null;\n\}/.test(code) && /var BOT_MENU = /.test(code),
+      'botAnswer 只保留能力菜单，其余 return null 交给 Agent');
+    log(!/if \(\/笑话\|段子\|逗我\|冷知识\/\.test\(t\)\) return botJoke/.test(code),
+      '已移除 /笑话|段子/ 这类硬编码关键词分支（理解能力差的根因）');
+    log(/if \(await tryIntentAutoReply\(text, conv\)\)/.test(code) && /var ag = await botAgent\(text, who, conv\)/.test(code),
+      'botReply 分层：预置功能 → Agent 主通道 → 旧链路兜底');
     if (LT && LT.sanitizeQuery) {
       log(LT.sanitizeQuery('@小美 查一下 HTTP 状态码') === 'HTTP 状态码',
-        'sanitizeQuery 剥掉指令词，只留检索关键词', LT.sanitizeQuery('@小美 查一下 HTTP 状态码'));
-      log(LT.sanitizeQuery('麻烦你帮我查一下 tar 怎么用') === 'tar 怎么用',
-        'sanitizeQuery 支持叠加前缀（麻烦你+帮我+查一下）', LT.sanitizeQuery('麻烦你帮我查一下 tar 怎么用'));
-      log(/searchWeb\(sanitizeQuery\(text\) \|\| text\)/.test(code), 'botReply 用 sanitizeQuery 清洗后再检索');
+        'sanitizeQuery（旧链路兜底仍在）', LT.sanitizeQuery('@小美 查一下 HTTP 状态码'));
     } else log(false, 'window.LT.sanitizeQuery 已导出');
 
     // 6) 回复去重：同一条消息只回一次（治「天气回两次」的另一半）
@@ -1806,6 +1823,58 @@ function makeStub() {
       log(!!grpulseDef && !/box-shadow/.test(grpulseDef),
         'grpulse 不含 box-shadow 扩散（从根上消除溢出被裁）', grpulseDef || '(未找到定义)');
     }
+  }
+
+  // ===== 智能体重构：小美接入服务端 Agent 主循环 =====
+  {
+    const LT = w.LT;
+    // 探活
+    await sleep(500);
+    __agentCalls = [];
+    __agentOn = true;
+    // botAnswer 只保留能力菜单，其余交 Agent
+    if (LT) {
+      const aMenu = LT.botAnswer ? LT.botAnswer('你能干什么', '甲', 'g:hall') : null;
+      log(typeof aMenu === 'string' && aMenu.length > 6, 'botAnswer 仍返回能力菜单（固定回答）', String(aMenu).slice(0, 30));
+      const aChat = LT.botAnswer ? LT.botAnswer('我最近压力好大，想辞职', '甲', 'g:hall') : 'x';
+      log(aChat === null, 'botAnswer 对自然语言返回 null（交给 Agent 理解，不再正则猜）', String(aChat));
+      const aJoke = LT.botAnswer ? LT.botAnswer('讲个笑话', '甲', 'g:hall') : 'x';
+      log(aJoke === null, '「讲个笑话」也走 Agent（本地不再抽签）', String(aJoke));
+    } else log(false, 'window.LT 已导出');
+
+    // 端到端：@小美 触发 -> 前端调 /api/chat -> 回复落到消息表
+    const hallInput = D.querySelector('#input');
+    // 切到大厅
+    const hallConv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+    if (hallConv) { hallConv.click(); await sleep(400); }
+    __agentResp = () => ({ ok: true, text: '压力大的时候先别急着做决定，跟我说说具体是哪一块最难受？', trace: [{ tool: 'web_search', args: { query: 'x' }, ok: true }], turns: 2, channel: 'deepseek' });
+    if (hallInput) {
+      hallInput.value = '@小美 我最近压力好大';
+      hallInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+      hallInput.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(2800);
+    }
+    const botMsgs = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei');
+    const lastBot = botMsgs.length ? String(botMsgs[botMsgs.length - 1].text) : '';
+    log(lastBot.indexOf('压力大') >= 0, 'Agent 回复已落库并上屏', lastBot.slice(0, 40));
+    log(__agentCalls.length >= 1, '前端确实调用了 /api/chat（服务端 Agent）', __agentCalls.length + ' 次');
+    const lastCall = __agentCalls[__agentCalls.length - 1] || {};
+    log(typeof lastCall.text === 'string' && lastCall.text.length > 0, '请求体带上用户原文', String(lastCall.text).slice(0, 30));
+    log(Array.isArray(lastCall.history), '请求体带上会话历史（模型才能理解上下文）', typeof lastCall.history);
+
+    // Agent 挂掉 -> 优雅回退（不抛异常、不刷屏）
+    __agentOn = false;
+    __agentResp = null;
+    const errN0 = errors.length;
+    const hallInput2 = D.querySelector('#input');
+    if (hallInput2) {
+      hallInput2.value = '@小美 你好呀';
+      hallInput2.dispatchEvent(new w.Event('input', { bubbles: true }));
+      hallInput2.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(2600);
+    }
+    log(errors.length === errN0, 'Agent 不可用时不产生 JS 异常（静默回退旧链路）', errors.slice(errN0).join(' | '));
+    __agentOn = true;
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
