@@ -1100,8 +1100,26 @@ function makeStub() {
       log(maskPOpen, '对局中点 ✕ 弹出二次确认框', maskPOpen ? '有' : '无');
       {
         // 确认框必须压过对局页（.groom z-index:120）
-        const z = maskPOpen ? w.getComputedStyle(maskP).zIndex : '-';
-        log(Number(z) > 120, '确认框 z-index 高于对局页（否则会被盖住看不见）', 'mask z=' + z + ' / groom z=120');
+        // ⚠️ 不能用 getComputedStyle：样式已外置到 cloud/styles.css，而 jsdom 不配 resources
+        //    时不会加载 <link>，样式表根本没生效 —— getComputedStyle 会返回空串而不是 200，
+        //    「未生效」和「规则写错了」两种情况在断言里看起来一模一样。
+        //    因此改为直接读 CSS 文本比对数值，两种存放形态（<style>/<link>）都成立。
+        const cssForZ = Array.prototype.map.call(D.querySelectorAll('style, link[rel="stylesheet"]'), (s) => {
+          if (s.tagName === 'STYLE') return s.textContent;
+          const href = s.getAttribute('href') || '';
+          if (/^https?:/i.test(href)) return '';
+          try { return fs.readFileSync(path.join(__dirname, href.replace(/^\//, '')), 'utf8'); }
+          catch (e) { return ''; }
+        }).join('\n');
+        const zNum = (sel) => {
+          const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const rules = [...cssForZ.matchAll(new RegExp('[^{}]*' + esc + '\\s*\\{([^}]*)\\}', 'g'))];
+          for (const r of rules) { const mm = r[1].match(/z-index:\s*(-?\d+)/); if (mm) return Number(mm[1]); }
+          return NaN;
+        };
+        const zMask = zNum('.mask'), zGroom = zNum('.groom');
+        log(zMask > zGroom, '确认框 z-index 高于对局页（否则会被盖住看不见）',
+          '.mask z=' + zMask + ' / .groom z=' + zGroom);
       }
       const cfP = D.querySelector('#cfOk');
       if (cfP) cfP.click();
@@ -1207,18 +1225,24 @@ function makeStub() {
     //   根因：GX 用有符号数表示阵营（正=红/负=黑），GX.side() 认的是正负号 —— GX.side(2) === 1。
     //   旧代码给双方都算 val = 房主?1:2，于是客人拿到 2 被判成红方，永远点不动自己的黑子。
     //   这里同时锁住「行为」和「源码不再出现该写法」两层。
+    //
+    // ⚠️ 不要为了制造「客方视角」去改 w.LT.S.uid：本用例的下游还有会话/未读/轮询等
+    //    依赖 S.uid 的断言，改完即便还原也会污染它们（实测会让未读红点用例挂掉）。
+    //    改为让**对局行**的 host_id 不等于真实 S.uid，同样满足 g.hostId !== S.uid。
     {
       const GXeng2 = w.LT.GX;
       log(!!GXeng2 && GXeng2.side(2) === 1 && GXeng2.side(-1) === 2,
         '象棋引擎按正负号分阵营（GX.side(2)===1，故 2 不能当黑方用）');
 
-      // 让客方（u_a）拿到轮次，棋盘用引擎初始局面
-      const xqRow2 = { id: 'gm_xq2', conv: 'g:hall', kind: 'xiangqi', host_id: 'u_test', host_name: '云端测试', guest_id: 'u_a', guest_name: '甲', status: 'playing', turn: 'guest', board: GXeng2.newBoard(), moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      // 让真实用户当「客方」：房主写成另一个人，轮次给 guest
+      const myUid = w.LT.S.uid;
+      const xqRow2 = { id: 'gm_xq2', conv: 'g:hall', kind: 'xiangqi', host_id: 'u_other', host_name: '别人', guest_id: myUid, guest_name: '我', status: 'playing', turn: 'guest', board: GXeng2.newBoard(), moves: [], winner: '', restart_by: '', restart_kind: '', created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       DATA.games.push(xqRow2);
-      // 把身份切成甲：S.uid !== host_id 才会走「客方」分支
-      const realUid = w.LT.S.uid;
-      w.LT.S.uid = 'u_a';
-      await sleep(200);
+      // ⚠️ 必须等一次轮询把 DATA 同步进 S.games 再 openRoom：
+      //    openRoom/renderRoom 读的是 S.games（由 refreshGames 从库里拉的），
+      //    只推 DATA 不同步的话 renderRoom 会走 `if (!g)` 分支渲染「对局已结束」，画布根本不存在。
+      await sleep(3200);
+      log(!!(w.LT.S.games || {})['gm_xq2'], '客方用例前置：对局已同步进 S.games');
       if (w.LT.openRoom) w.LT.openRoom('gm_xq2');
       await sleep(400);
       const cv2 = D.querySelector('#groom #gBoard');
@@ -1251,7 +1275,8 @@ function makeStub() {
         log(!w.LT.S.xqSel, '象棋：客方选不中对方的红兵 (6,0)');
       }
       if (w.LT.close) w.LT.close();
-      w.LT.S.uid = realUid;
+      // 清掉这局，避免留一条对局记录干扰下游断言
+      DATA.games = DATA.games.filter((x) => x.id !== 'gm_xq2');
       await sleep(300);
 
       // 源码层锁定：不能再出现「把 2 当阵营」的写法
