@@ -54,6 +54,7 @@ const QUESTIONS = {
       weather: 'Wants the weather of a place. Chinese example: "北京今天天气"',
       web_search: 'Wants a factual answer that requires looking something up online, not a quote or weather. Chinese example: "帮我查一下 xxx 是什么公司"',
       help: 'Wants to know which commands or features are available. Chinese examples: "有什么功能", "怎么用"',
+      analyze: 'Wants the assistant to analyze the recent conversation — mood, intent, affinity/engagement signal, reply quality. Chinese examples: "分析下这段对话", "帮我看看聊得怎么样", "我们聊得还行吗"',
       chitchat: 'Greeting, small talk, emotion, or anything unrelated to quotes / weather / lookup'
     }
   },
@@ -81,6 +82,133 @@ const QUESTIONS = {
     }
   }
 };
+
+/* 聊天洞察（参考 crush-monitor 第一层 Jev，迁移到小美）：
+   给定一段对话的 self/other 消息，并行问 5 个结构化判断：
+     - mood        整体氛围的主要情绪（12 类，取概率最高）
+     - intent      对方最近一条消息的主要意图（35 类）
+     - affinity    对方对说话人的好感/投入信号（5 档）
+     - quality     我方最近回复的质量（5 档）
+     - next_action 建议下一步动作
+   边界继承 crush-monitor：不假定线下关系/性别/附件，概率只来自 Jev，
+   解释（如有）不覆盖观察。instructions 用英文（Jev 英文最优），criteria 用中文。 */
+const ANALYZE_QUESTIONS = {
+  mood: {
+    type: 'choice',
+    instructions: 'Based ONLY on the conversation messages in state, what is the dominant emotional tone of the recent exchange? Pick the single best fit. Do not assume any off-screen relationship, gender, or attachment. Chinese daily context; sarcasm and jokes happen. If truly unclear pick unknown.',
+    criteria: {
+      happy: '愉快、满足、开心或兴奋',
+      confused: '不理解、好奇、疑问或困惑',
+      angry: '真实生气、愤怒或强烈不满',
+      sad: '伤心、低落、悲伤',
+      shy: '羞涩、难为情或暧昧时不好意思',
+      caring: '担心、关切或体贴对方',
+      teasing: '开玩笑、逗对方、玩梗或善意戏谑',
+      calm: '客观陈述、平静中性交流，无明显情绪',
+      annoyed: '厌烦、想赶紧结束、不愿重复解释',
+      surprised: '意外、吃惊、超出预期',
+      disappointed: '期待落空、委屈、失望',
+      unknown: '无法判断主要情绪或以上均不适合'
+    }
+  },
+  intent: {
+    type: 'choice',
+    instructions: 'Look at the LAST message from "other" (not self, not the assistant) in the conversation. What is its primary communicative intent? Pick the single best fit; competing interpretations are fine, pick the most likely. Chinese context.',
+    criteria: {
+      share: '主动讲自己的经历、活动或状态，主要是分享而非回答问题',
+      answer: '回应前面的具体询问，主要目的是提供所问信息',
+      inform: '通知事实、安排或进展',
+      ask: '获取事实、原因、安排或情况',
+      clarify: '核对自己对前文的理解',
+      explain: '澄清原因、误会或补充背景',
+      opinion: '陈述看法或评价',
+      agree: '赞同对方观点、感受或提议',
+      disagree: '提出不同观点、反驳或纠正',
+      acknowledge: '简短确认已看到或听懂',
+      continue: '接住前文或补充话头，维持对话',
+      change: '将交流引向另一个话题',
+      joke: '开玩笑、接梗或善意互损',
+      vent: '表达困扰或抱怨以释放感受',
+      comfort_seek: '通过表达脆弱或委屈，希望得到情绪支持',
+      validation: '希望对方肯定自己的感受、看法或价值',
+      help: '希望对方提供具体建议、信息或实际帮助',
+      advice: '主动提供解决办法或行动建议',
+      care: '关注对方状态或需要，主要是关怀',
+      comfort: '接住对方困扰、鼓励或给予支持',
+      praise: '肯定对方特质或表现',
+      thanks: '感谢对方的回应、帮助或付出',
+      apologize: '承认不妥、致歉或尝试修复交流关系',
+      attention: '希望对方多注意、回应或陪伴自己',
+      suggest: '提出做某事的提议',
+      invite: '具体邀约对方参与活动',
+      refuse: '拒绝请求或提议',
+      worry: '表达对某事的担忧',
+      plan: '讨论或安排未来计划',
+      small_talk: '寒暄、客套或无实质内容的填充',
+      unknown: '无法判断主要意图'
+    }
+  },
+  affinity: {
+    type: 'choice',
+    instructions: 'Only from the actual exchange in state, rate how much positive affinity/engagement signal "other" shows toward "self" (the speaker). Short replies and busyness do NOT automatically mean coldness. Relationship labels are not evidence.',
+    criteria: {
+      '1_distant': '明确疏远、拒绝或排斥接近',
+      '2_polite': '有限的礼貌回应，没有主动延续的信号',
+      '3_neutral': '自然交流并有回应，但缺少明显亲密信号',
+      '4_warm': '主动关心、延续话题或投入个人细节',
+      '5_close': '明确亲密、相互接纳的暧昧或主动接近行动'
+    }
+  },
+  quality: {
+    type: 'choice',
+    instructions: 'Look at the LAST message sent by "self" in the conversation, considering the context before it. Rate how well it responds to the other person\'s prior message. Do not assume longer is better.',
+    criteria: {
+      '1_poor': '明显冒犯、强迫或无视已表达的边界',
+      '2_awkward': '明显不合语境、施压或错过关键情绪',
+      '3_flat': '基本合适但平淡、泛泛，延续空间有限',
+      '4_good': '具体接住话题或情绪，自然而不施压',
+      '5_great': '非常贴合、有趣或体贴，同时给对方舒适的表达空间'
+    }
+  },
+  next_action: {
+    type: 'choice',
+    instructions: 'Given the conversation state, what is the single best next move for "self"? Pick the most helpful. If context is insufficient, pick insufficient.',
+    criteria: {
+      continue: '接住已有话题继续聊',
+      ask: '问一个具体轻松问题',
+      empathize: '先回应倾诉或不满的感受',
+      suggest: '已有相互投入和共同兴趣，可低压力提议一起做点什么',
+      invite: '有足够相互投入，可以低压力邀约',
+      clarify: '意思关键且含糊，需要温和确认',
+      wait: '我方已发出需要对方回应的信息，应先等待',
+      close: '对方忙或表达结束，本次先收尾',
+      respect: '对方明确拒绝接近或要求停止，要尊重边界',
+      insufficient: '上下文不足，无法建议'
+    }
+  }
+};
+
+function shapeAnalyze(j) {
+  const a = (j && j.answers) || {};
+  const pick = (q) => {
+    const x = a[q] || {};
+    return {
+      choice: x.choice || '',
+      probabilities: x.probabilities || {},
+      confidence: typeof x.confidence === 'number' ? x.confidence : 0,
+    };
+  };
+  return {
+    ok: true,
+    mood: pick('mood'),
+    intent: pick('intent'),
+    affinity: pick('affinity'),
+    quality: pick('quality'),
+    next_action: pick('next_action'),
+    model: j.model || MODEL,
+    usage: j.usage || null,
+  };
+}
 
 /* ---------- 极简内存缓存，避免同一句话反复计费 ---------- */
 const cache = new Map();
@@ -200,6 +328,53 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // 聊天洞察：把一段对话的 self/other 消息发给 Jev，返回情绪/意图/好感/质量/建议
+  if (url.pathname === '/api/analyze' && req.method === 'GET') {
+    return send(res, 200, { ok: true, enabled: !!API_KEY, model: MODEL });
+  }
+  if (url.pathname === '/api/analyze' && req.method === 'POST') {
+    if (!API_KEY) return send(res, 200, { ok: false, reason: 'no_key' });
+    let payload;
+    try { payload = JSON.parse((await readBody(req, 64 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { ok: false, reason: 'bad_json' }); }
+    const msgs = Array.isArray(payload.messages) ? payload.messages.slice(0, 12) : [];
+    if (!msgs.length) return send(res, 400, { ok: false, reason: 'empty_messages' });
+    const state = {
+      messages: msgs.map(function (m) {
+        return {
+          id: String(m.id || '').slice(0, 80),
+          sender: m.sender === 'self' ? 'self' : (m.sender === 'other' ? 'other' : 'unknown'),
+          text: String(m.text || '').slice(0, 2000),
+          kind: m.kind || 'text',
+        };
+      }),
+    };
+    const ck = 'an:' + JSON.stringify(state);
+    const hit = cacheGet(ck);
+    if (hit) return send(res, 200, Object.assign({ cached: true }, hit));
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(function () { ac.abort(); }, 8000);
+      const r = await fetch(BASE_URL + '/v1/systemone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + API_KEY },
+        body: JSON.stringify({ state: state, model: MODEL, questions: ANALYZE_QUESTIONS }),
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) {
+        const body = await r.text().catch(function () { return ''; });
+        return send(res, 200, { ok: false, reason: 'upstream', detail: String(body).slice(0, 200) });
+      }
+      const out = shapeAnalyze(await r.json());
+      cacheSet(ck, out);
+      return send(res, 200, out);
+    } catch (e) {
+      console.warn('[analyze]', e.message);
+      return send(res, 200, { ok: false, reason: 'upstream', detail: String(e.message || e).slice(0, 200) });
+    }
+  }
+
   // 静态文件
   let rel = decodeURIComponent(url.pathname);
   if (rel === '/' || rel === '') rel = '/index.html';
@@ -217,4 +392,4 @@ if (require.main === module) {
     console.log('[cloud] listening on :' + PORT + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)') + '  model=' + MODEL);
   });
 }
-module.exports = { server, QUESTIONS, shapeAnswer };
+module.exports = { server, QUESTIONS, shapeAnswer, ANALYZE_QUESTIONS, shapeAnalyze };

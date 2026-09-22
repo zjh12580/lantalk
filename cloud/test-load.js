@@ -1293,7 +1293,7 @@ function makeStub() {
   cmdInput.value = '#';
   cmdInput.dispatchEvent(new w.Event('input', { bubbles: true }));
   await sleep(140);
-  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 4, '输入 # 弹出 4 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
+  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 5, '输入 # 弹出 5 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
   const btcItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#btc')[0];
   log(!!btcItem, '菜单含 #btc 指令项');
   const cardsBefore = D.querySelectorAll('#mList .cardmsg').length;
@@ -1327,6 +1327,40 @@ function makeStub() {
   const nameCard = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
   log(!!nameCard && nameCard.textContent.indexOf('贵州茅台') >= 0, '名称解析命中 贵州茅台 并展示名称', nameCard ? nameCard.textContent.slice(0, 80) : 'none');
   cmdInput.value = '';;
+
+  // ===== 聊天洞察（Jev 分析当前会话情绪/意图/好感/质量）=====
+  const W = D.defaultView;
+  const anaItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#分析')[0];
+  log(!!anaItem, '菜单含 #分析 指令项');
+  // mock /api/analyze，验证整条链路：输入 #分析 → 发卡片（不依赖内部闭包函数）
+  const realFetchA = W.fetch;
+  W.fetch = (url, opts) => {
+    if (String(url).indexOf('/api/analyze') >= 0) {
+      return Promise.resolve({ json: () => Promise.resolve({
+        ok: true,
+        mood: { choice: 'calm', probabilities: { calm: 0.6 }, confidence: 0.8 },
+        intent: { choice: 'ask', probabilities: { ask: 0.6 }, confidence: 0.7 },
+        affinity: { choice: '3_neutral', probabilities: {}, confidence: 0.6 },
+        quality: { choice: '4_good', probabilities: {}, confidence: 0.5 },
+        next_action: { choice: 'ask', probabilities: {}, confidence: 0.7 },
+        model: 'jev-latest', usage: null,
+      }) });
+    }
+    return realFetchA(url, opts);
+  };
+  // 先发一条普通文本，确保当前会话有可分析的消息
+  const cardsB4A = D.querySelectorAll('#mList .cardmsg').length;
+  cmdInput.value = '在吗';
+  D.querySelector('#bSend').click();
+  await sleep(400);
+  cmdInput.value = '#分析';
+  D.querySelector('#bSend').click();
+  await sleep(600);
+  W.fetch = realFetchA;
+  log(D.querySelectorAll('#mList .cardmsg').length === cardsB4A + 1, '执行 #分析 后新增一张洞察卡片', D.querySelectorAll('#mList .cardmsg').length);
+  const anCardA = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
+  log(!!anCardA && anCardA.textContent.indexOf('聊天洞察') >= 0 && anCardA.textContent.indexOf('好感/投入') >= 0 && anCardA.textContent.indexOf('我方回复') >= 0, '洞察卡片含标题与评分条', anCardA ? anCardA.textContent.replace(/\s+/g, ' ').slice(0, 130) : 'none');
+  cmdInput.value = '';
 
   D.querySelector('#meBox').click();
   await sleep(400);

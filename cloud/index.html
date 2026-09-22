@@ -447,6 +447,18 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .card .cv.flat{color:var(--tx2)}
 .card .cfoot{font-size:10px;color:var(--tx3);padding:6px 12px;border-top:1px solid var(--bd);text-align:center;white-space:pre-wrap;line-height:1.4}
 .card.err .cbody{padding:12px;text-align:center;color:var(--danger);display:block}
+/* 聊天洞察卡片：评分条 + 情绪标签 */
+.card .mrow{display:flex;align-items:center;gap:8px;padding:7px 0}
+.card .mlab{flex:0 0 auto;width:58px;font-size:12px;color:var(--tx2);font-weight:600}
+.card .mbars{flex:1;display:flex;gap:3px}
+.card .mbar{flex:1;height:7px;border-radius:4px;background:var(--bd)}
+.card .mbar.on{background:var(--tx3)}
+.card .mbar.on.l4{background:#f0a93b}
+.card .mbar.on.l5{background:var(--brand)}
+.card .mval{flex:0 0 auto;width:66px;text-align:right;font-size:12px;color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .tags{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0 2px}
+.card .tag{font-size:12px;background:var(--bg3);border:1px solid var(--bd);border-radius:999px;padding:2px 9px;color:var(--tx2)}
+.card .tag b{color:var(--brand);font-weight:700;margin-left:2px}
 /* 头像/按钮悬停过渡 */
 .mav{transition:box-shadow .15s ease,transform .15s ease}
 .mav:hover{transform:scale(1.06)}
@@ -2410,7 +2422,8 @@ var CMDS = [
   { cmd: '#btc', sym: 'bitcoin', label: '比特币行情', desc: '实时价格 / 涨跌幅 / 成交量', arg: false },
   { cmd: '#eth', sym: 'ethereum', label: '以太坊行情', desc: '实时价格 / 涨跌幅 / 成交量', arg: false },
   { cmd: '#股票', sym: '', label: '股票行情', desc: '# + 代码或名称：#600519 / #茅台 / #腾讯', arg: true },
-  { cmd: '#help', sym: '', label: '指令帮助', desc: '列出全部可用预置指令', arg: false }
+  { cmd: '#help', sym: '', label: '指令帮助', desc: '列出全部可用预置指令', arg: false },
+  { cmd: '#分析', label: '聊天洞察', desc: '分析当前会话氛围/意图/好感信号（消耗 AI 额度）', arg: false }
 ];
 var DEFAULT_PH = '输入消息，Enter 发送，Shift+Enter 换行...';
 function fmtNum(n) {
@@ -2439,6 +2452,15 @@ function cardHtml(json) {
   var c;
   try { c = JSON.parse(json); } catch (e) { c = { err: '卡片数据无法解析' }; }
   if (c.err) return '<div class="card err"><div class="cbody">⚠️ ' + esc(c.err) + '</div></div>';
+  var bars = (c.bars || []).map(function (b) {
+    var lv = Math.max(1, Math.min(5, b.level || 1));
+    var cells = '';
+    for (var i = 1; i <= 5; i++) cells += '<i class="mbar' + (i <= lv ? ' on l' + lv : '') + '"></i>';
+    return '<div class="mrow"><span class="mlab">' + esc(b.label) + '</span><span class="mbars">' + cells + '</span><span class="mval">' + esc(b.text || '') + '</span></div>';
+  }).join('');
+  var tags = (c.tags || []).map(function (t) {
+    return '<span class="tag">' + esc(t.label) + (t.pct ? ' <b>' + esc(t.pct) + '</b>' : '') + '</span>';
+  }).join('');
   var rows = (c.rows || []).map(function (r) {
     return '<div class="crow"><span class="ck">' + esc(r.k) + '</span><span class="cv ' + (r.cls || '') + '">' + esc(r.v) + '</span></div>';
   }).join('');
@@ -2446,13 +2468,14 @@ function cardHtml(json) {
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
     (c.sub ? '<div class="csub">' + esc(c.sub) + '</div>' : '') + '</div></div>' +
-    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + rows + '</div>' +
+    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + '</div>' +
     (c.foot ? '<div class="cfoot">' + esc(c.foot) + '</div>' : '') + '</div>';
 }
 function parseHash(text) {
   var s = String(text || '').trim().replace(/^#/, '');
   if (!s) return { kind: 'unknown' };
   var low = s.toLowerCase();
+  if (low === 'analyze' || low === 'analyse' || s === '分析') return { kind: 'analyze' };
   if (low === 'help') return { kind: 'help' };
   var cryptoMap = { btc: 'bitcoin', bitcoin: 'bitcoin', eth: 'ethereum', ethereum: 'ethereum', doge: 'dogecoin', dogecoin: 'dogecoin' };
   if (cryptoMap[low]) return { kind: 'crypto', sym: cryptoMap[low] };
@@ -2589,9 +2612,65 @@ function helpCard() {
 function postCard(card) {
   sendMsg({ type: 'card', text: JSON.stringify(card), mentions: [], reply_to: null });
 }
+// ---------- 聊天洞察（Jev 分析当前会话情绪/意图/好感/质量）----------
+var ANALYZE_LABELS = {
+  mood: { happy: '开心', confused: '疑惑', angry: '愤怒', sad: '难过', shy: '害羞', caring: '关心', teasing: '调侃', calm: '平静', annoyed: '不耐烦', surprised: '惊讶', disappointed: '失落', unknown: '难判断' },
+  intent: { share: '分享近况', answer: '回答问题', inform: '告知信息', ask: '询问信息', clarify: '确认理解', explain: '解释说明', opinion: '表达观点', agree: '表示认同', disagree: '表达异议', acknowledge: '回应收到', continue: '延续话题', change: '转移话题', joke: '玩笑逗趣', vent: '倾诉烦恼', comfort_seek: '寻求安慰', validation: '寻求认同', help: '请求帮助', advice: '提供建议', care: '表达关心', comfort: '安慰支持', praise: '赞美欣赏', thanks: '表达感谢', apologize: '道歉修复', attention: '寻求关注', suggest: '提出提议', invite: '具体邀约', refuse: '拒绝', worry: '表达担忧', plan: '讨论计划', small_talk: '寒暄客套', unknown: '难判断' },
+  affinity: { '1_distant': '疏远排斥', '2_polite': '礼貌回应', '3_neutral': '自然中性', '4_warm': '主动关心', '5_close': '亲密接近' },
+  quality: { '1_poor': '冒犯越界', '2_awkward': '不合语境', '3_flat': '平淡泛泛', '4_good': '接住话题', '5_great': '体贴到位' },
+  next_action: { continue: '继续聊', ask: '问个问题', empathize: '回应感受', suggest: '提议一起做', invite: '低压力邀约', clarify: '温和确认', wait: '先等待', close: '收尾结束', respect: '尊重边界', insufficient: '信息不足' }
+};
+function analyzeCard(j) {
+  var L = ANALYZE_LABELS;
+  var moodProbs = Object.keys(j.mood.probabilities || {})
+    .map(function (k) { return [k, j.mood.probabilities[k]]; })
+    .filter(function (e) { return e[0] in L.mood && e[1] > 0; })
+    .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 3);
+  var tags = moodProbs.map(function (e) { return { label: L.mood[e[0]], pct: Math.round(e[1] * 100) + '%' }; });
+  var lvOf = function (c) { var n = parseInt(String(c).charAt(0), 10); return isNaN(n) ? 3 : n; };
+  var bars = [
+    { label: '好感/投入', level: lvOf(j.affinity.choice), text: L.affinity[j.affinity.choice] || j.affinity.choice || '—' },
+    { label: '我方回复', level: lvOf(j.quality.choice), text: L.quality[j.quality.choice] || j.quality.choice || '—' }
+  ];
+  var rows = [
+    { k: '对方意图', v: L.intent[j.intent.choice] || j.intent.choice || '—' },
+    { k: '建议动作', v: L.next_action[j.next_action.choice] || j.next_action.choice || '—' }
+  ];
+  return {
+    logo: '📊', title: '聊天洞察', sub: '由 AI 分析，仅供参考 · ' + (j.model || ''),
+    wide: true, bars: bars, tags: tags, rows: rows,
+    foot: '本分析仅基于文字内容，不构成关系判断或建议'
+  };
+}
+function analyzeUnavailable(j) {
+  var reason = (j && j.reason) || 'unknown';
+  var msg = reason === 'no_key' ? '未配置 AI 密钥，无法分析' :
+            reason === 'network' ? '网络错误，分析失败' :
+            reason === 'upstream' ? 'AI 服务暂不可用' : '分析失败';
+  return { logo: '📊', title: '聊天洞察', sub: '暂不可用', rows: [{ k: '状态', v: msg }], foot: '可稍后重试，或服务端配置 TypeSafe API Key' };
+}
+function postAnalyzeCard() {
+  var list = (S.msgs[S.cur] || []).filter(function (m) {
+    return m && m.type === 'text' && m.text && !m.revoked && m.sender_id !== BOT.id;
+  }).slice(-12);
+  if (!list.length) { toast('当前会话没有可分析的聊天记录', 'err'); return; }
+  var messages = list.map(function (m) {
+    return { id: String(m.id != null ? m.id : (m.ts || 'x')), sender: m.sender_id === S.uid ? 'self' : 'other', text: m.text };
+  });
+  toast('小美正在分析这段对话…');
+  fetch('/api/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: messages })
+  }).then(function (r) { return r.json(); })
+    .then(function (j) { postCard((j && j.ok) ? analyzeCard(j) : analyzeUnavailable(j)); })
+    .catch(function () { postCard(analyzeUnavailable({ reason: 'network' })); });
+}
+
 function handleHashCmd(text) {
   var p = parseHash(text);
   if (p.kind === 'help') { postCard(helpCard()); return; }
+  if (p.kind === 'analyze') { postAnalyzeCard(); return; }
   if (p.kind === 'unknown') { toast('未识别的指令：' + esc(text) + '（输入 # 查看可用指令）', 'err'); return; }
   toast('查询中…');
   var prom;
@@ -2670,6 +2749,7 @@ function tryIntentAutoReply(text, conv) {
     if (it.intent === 'crypto_quote') return runCryptoIntent(it);
     if (it.intent === 'stock_quote') return runStockIntent(it, text);
     if (it.intent === 'help' && it.intent_confidence >= INTENT.min) { postCard(helpCard()); return true; }
+    if (it.intent === 'analyze' && it.intent_confidence >= INTENT.min) { postAnalyzeCard(); return true; }
     return false;
   }).catch(function () { return false; });
 }
