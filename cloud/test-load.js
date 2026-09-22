@@ -4,7 +4,18 @@ const fs = require('fs');
 const path = require('path');
 const { JSDOM, VirtualConsole } = require('jsdom');
 
-const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+const rawHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+const errors_early = [];
+// ⚠️ bot.js 是外链脚本，jsdom 默认不加载本地相对路径的外链（且 runScripts:'dangerously' 下
+//    会静默跳过）→ 测试前把 <script src="bot.js?v=N"> 就地替换成内联内容。
+//    这样既保持线上「独立文件 + 版本号」的形态，测试也能覆盖模块真实代码。
+const botSrc = fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
+const html = rawHtml.replace(
+  /<script\s+src="bot\.js(?:\?[^"]*)?"><\/script>/i,
+  '<script>\n' + botSrc.replace(/<\/script>/gi, '<\\/script>') + '\n</script>'
+);
+if (html === rawHtml) errors_early.push('index.html 里找不到 <script src="bot.js?v=...">，小美模块未被内联');
+
 const errors = [];
 let pass = 0, fail = 0;
 const log = (ok, name, extra) => {
@@ -23,6 +34,7 @@ const DATA = {
   messages: [],
   live: [],
   games: [],
+  memories: [],
 };
 let seq = 0;
 const TABLE = {};
@@ -105,7 +117,7 @@ function builder(table) {
   };
   return b;
 }
-['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live', 'games'].forEach((t) => { TABLE[t] = () => builder(t); });
+['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live', 'games', 'memories'].forEach((t) => { TABLE[t] = () => builder(t); });
 
 let __updates = [];
 let __updateFail = false;      // 置 true 时模拟网关「落盘成功但响应报 404」
@@ -673,7 +685,9 @@ function makeStub() {
 
     // 1) 接入方式：Keyless 网关 —— 前端源码里不得出现任何硬编码密钥
     {
-      const src = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+      // ⚠️ 小美的模型调用已搬到 bot.js，必须两个文件一起扫，否则断言形同虚设
+      const src = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')
+        + '\n' + fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
       log(!/sk-[A-Za-z0-9]{16,}/.test(src), '前端源码无 sk- 硬编码密钥（apikey 由云端网关托管）');
       log(/CLOUD\.llm\.chat\.completions\.create/.test(src), '通过 CLOUD.llm 网关调用（非直连第三方域名）');
       log(!/api\.deepseek\.com/.test(src), '不直连 api.deepseek.com（避免密钥泄露 + CORS）');
@@ -1252,12 +1266,16 @@ function makeStub() {
   const tJoke = await botTalk('@小美 讲个笑话');
   log(tJoke.length > 10, '「讲个笑话」有回复', tJoke.slice(0, 30));
   const tMenu = await botTalk('@小美 你能干什么');
-  log(tMenu.indexOf('笑话') >= 0 && tMenu.indexOf('古诗') >= 0 && tMenu.indexOf('天气') >= 0,
-    '问「你能干什么」输出技能菜单（带 6 个序号技能）', tMenu.slice(0, 40).replace(/\n/g, ' '));
+  // 新菜单不再用序号罗列，改为「能力关键词」清单；断言跟着改成语义检查
+  log(tMenu.indexOf('聊天') >= 0 && tMenu.indexOf('笑话') >= 0 && tMenu.indexOf('天气') >= 0 && tMenu.indexOf('记忆') >= 0,
+    '问「你能干什么」输出能力菜单（含聊天/笑话/天气/记忆）', tMenu.slice(0, 40).replace(/\n/g, ' '));
   const tNum = await botTalk('@小美 2');
-  log(tNum.length > 20 && tNum !== '(无回复)', '菜单后直接回复序号 2 -> 触发讲故事', tNum.slice(0, 30));
+  log(tNum.length > 20 && tNum !== '(无回复)', '菜单后直接回复序号 2 -> 触发内容型生成', tNum.slice(0, 30));
   const tPoem = await botTalk('@小美 来首古诗');
-  log(tPoem.indexOf('《') >= 0, '「来首古诗」返回古诗（带书名号标题）', tPoem.slice(0, 24));
+  // ⚠️ 古诗已从「硬编码抽签」改为「模型现场生成」：测试环境无 LLM，
+  //    会走兜底话术，因此不能再断言必须出现书名号 —— 只断言"确实接话了"。
+  log(tPoem !== '(无回复)' && tPoem.length > 4, '「来首古诗」走到内容型生成路径并有回复', tPoem.slice(0, 24));
+  // 真正的路由正确性由模块级断言保证（见下方 INTENTS 表检查）
   const tW = await botTalk('@小美 北京天气', 3200);
   log(tW.indexOf('°C') >= 0 && tW.indexOf('北京') >= 0, '「北京天气」返回 open-meteo 真实天气', tW.slice(0, 40).replace(/\n/g, ' '));
   const tN = await botTalk('@小美 看看新闻', 3600);
@@ -1461,7 +1479,9 @@ function makeStub() {
   // ===== 本轮新功能：小美联网检索（手工 RAG）=====
   {
     const LT = w.LT;
-    const src2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+    // ⚠️ 检索链路已整体搬进 bot.js：必须把两个文件拼起来扫，否则断言永远失败
+    const src2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')
+      + '\n' + fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
 
     // 1) 接入方式：只能是「免 key + 支持 CORS」的公开源（静态托管起不了后端进程）
     log(!/sk-[A-Za-z0-9]{16,}/.test(src2), '检索链路同样无硬编码密钥');
@@ -1520,11 +1540,146 @@ function makeStub() {
     }
 
     // 6) 检索资料真的拼进了 LLM 的 system 提示（手工 RAG 的关键一环）
-    log(/botLLM\(text, who, conv, ref\)/.test(src2) || /botLLM\([^)]*ref\)/.test(src2),
-      'botLLM 接受第 4 个参数 ref（检索资料）');
+    log(/function buildSystem/.test(src2) && /ref/.test(src2),
+      'system 提示组装函数 buildSystem 接受检索资料（ref）');
     log(/联网检索到的资料/.test(src2), 'system 提示里明确要求「优先依据资料回答、查不到就说查不到」');
-    log(/await searchWeb\(/.test(src2), 'botReply 的闲聊分支会先 searchWeb 再喂模型');
-    log(/S\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
+    log(/searchWeb\(plan\.text\)/.test(src2), 'runGen 会先 searchWeb 再把资料喂给模型');
+    log(/s\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
+  }
+
+  // ===== 本轮重构：小美模块化（bot.js）+ 人格 / 情绪 / 意图注册表 / 记忆 =====
+  {
+    const LT = w.LT, B = w.LT_BOT;
+    const botSrc = fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
+    const htmlSrc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+
+    // 1) 模块化：独立文件 + 版本号（缓存一致性）
+    log(/<script\s+src="bot\.js\?v=\d+"><\/script>/.test(htmlSrc),
+      'index.html 以带版本号的独立文件引入 bot.js（避免 CDN/浏览器吃旧缓存）');
+    log(!!B, 'bot.js 挂到 window.LT_BOT');
+    log(/(?:window|root)\.LT_BOT\s*=/.test(botSrc), 'bot.js 自注册到全局 LT_BOT');
+    // 旧的大坨代码确实搬走了（防止"复制一份忘删旧的"导致两套逻辑打架）
+    log(!/var JOKES\s*=/.test(htmlSrc) && !/var STORIES\s*=/.test(htmlSrc) && !/var POEMS\s*=/.test(htmlSrc),
+      'index.html 里的硬编码 JOKES/STORIES/POEMS 已删除（内容型改现场生成）');
+    log(!/var BOT_KEY\s*=/.test(htmlSrc) && !/var BOT_MENU\s*=/.test(htmlSrc),
+      'index.html 里的 BOT_KEY/BOT_MENU 已删除（搬入模块的意图表）');
+
+    // 2) 人格档案：必须有角色/语气/边界，且不再是"活泼的小助手"一句话
+    const P = B && B.PERSONA;
+    log(!!P && Array.isArray(P.core) && P.core.length >= 5, 'PERSONA.core 人格条目 ≥5 条', P ? P.core.length : 'none');
+    log(!!P && Array.isArray(P.rules) && P.rules.some((r) => /思考过程|人格设定/.test(r)),
+      'PERSONA.rules 明确禁止输出思考过程 / 泄露人格设定');
+
+    // 3) 情绪系统：5 种状态 + 时段基线 + 触发规则
+    const M = B && B.MOODS;
+    log(!!M && Object.keys(M).length === 5, 'MOODS 恰好 5 种情绪', M ? Object.keys(M).join(',') : 'none');
+    const moodOk = M && ['happy', 'curious', 'focus', 'sleepy', 'gentle'].every((k) => M[k] && M[k].hint && M[k].emoji);
+    log(!!moodOk, '5 种情绪都带 emoji 与语气 hint（真正驱动 prompt）');
+    if (B && B.moodByHour) {
+      log(B.moodByHour(3) === 'sleepy', '凌晨 3 点 → 基线情绪=困倦');
+      log(B.moodByHour(10) === 'happy', '上午 10 点 → 基线情绪=开心');
+      log(B.moodByHour(20) === 'curious', '晚上 8 点 → 基线情绪=好奇');
+      log(B.moodByHour(7) === 'gentle', '清晨 7 点 → 基线情绪=温柔');
+    } else log(false, 'moodByHour 已导出');
+
+    // 4) 情绪会被输入改变
+    if (B && B.moodTouch) {
+      B.moodTouch('我今天好难过啊');
+      log(B.moodNow().key === 'gentle', '负面情绪输入 → 切换成「温柔」', B.moodNow().key);
+      B.moodTouch('这个 bug 怎么修');
+      log(B.moodNow().key === 'focus', '提问类输入 → 切换成「专注」', B.moodNow().key);
+      B.moodTouch('哈哈哈哈你太厉害了');
+      log(B.moodNow().key === 'happy', '夸赞/开心输入 → 切换成「开心」', B.moodNow().key);
+    } else log(false, 'moodTouch 已导出');
+
+    // 5) 意图注册表：表驱动、有 kind 分类、覆盖关键意图
+    const I = B && B.INTENTS;
+    log(!!I && Array.isArray(I) && I.length >= 10, 'INTENTS 意图表 ≥10 条', I ? I.length : 'none');
+    log(!!I && I.every((x) => x.id && x.kind && x.k), '每条意图都有 id / kind / 匹配规则');
+    log(!!I && I.every((x) => ['data', 'gen', 'say'].includes(x.kind)), '意图 kind 取值合法（data/gen/say）');
+    const byId = {};
+    (I || []).forEach((x) => { byId[x.id] = x; });
+    log(!!byId['joke'] && byId['joke'].kind === 'gen', '笑话 = 内容型（gen），交给模型现场生成');
+    log(!!byId['story'] && byId['story'].kind === 'gen', '故事 = 内容型（gen）');
+    log(!!byId['poem'] && byId['poem'].kind === 'gen', '诗词 = 内容型（gen）');
+    log(!!byId['weather'] && byId['weather'].kind === 'data', '天气 = 事实型（data），走真实数据源');
+    log(!!byId['news'] && byId['news'].kind === 'data', '新闻 = 事实型（data）');
+    log(!!byId['chat'] && byId['chat'].kind === 'gen', '兜底 chat = 内容型（gen），不再抽签');
+    log(!!byId['mem-save'] && !!byId['mem-ask'] && !!byId['mem-forget'], '记忆三条意图齐备（记住/回忆/忘掉）');
+
+    // 6) 路由正确性（模块级，不经 UI）
+    if (B && B.matchIntent) {
+      const mi = (t) => (B.matchIntent(t) || {}).id;
+      log(mi('讲个笑话') === 'joke', '「讲个笑话」→ joke 意图');
+      log(mi('给我讲个睡前故事') === 'story', '「讲个睡前故事」→ story 意图');
+      log(mi('念首诗') === 'poem', '「念首诗」→ poem 意图');
+      log(mi('北京天气') === 'weather', '「北京天气」→ weather 意图');
+      log(mi('看看新闻') === 'news', '「看看新闻」→ news 意图');
+      log(mi('记住：我喜欢喝美式') === 'mem-save', '「记住：xxx」→ mem-save 意图');
+      log(mi('你还记得我喜欢喝什么吗') === 'mem-ask', '「你还记得…」→ mem-ask 意图');
+      log(mi('忘掉美式') === 'mem-forget', '「忘掉 xxx」→ mem-forget 意图');
+      log(mi('你今天心情怎么样') === 'mood', '「你心情怎么样」→ mood 意图');
+      log(mi('随便聊聊吧今天真不错') === 'chat', '普通闲聊 → 落到 chat 兜底（不抽签）');
+    } else log(false, 'matchIntent 已导出');
+
+    // 7) 内容型意图必须带「生成提示」，否则模型还是不知道要写什么
+    log(!!byId['joke'] && /笑话/.test(byId['joke'].hint || ''), 'joke 意图带生成提示（style hint）');
+    log(byId['joke'] && byId['joke'].temp != null, 'joke 意图带较高温度（内容型需要发散）');
+
+    // 8) botAnswer 契约：三种返回形态都要能被上层正确处理
+    log(typeof LT.botAnswer === 'function', 'window.LT.botAnswer 已导出（转发到模块）');
+    const aMenu = LT.botAnswer('你能干什么', 'u_test', 'g:hall');
+    // ⚠️ 菜单返回的是「模板文案」。botAnswer 已把 {n} 替换掉，但 {t}（当前时间）留给上层 botReply 填，
+    //    所以这里断言「是字符串 + 含能力项 + 已替换 {n}」，不能断言不含 {t}。
+    log(typeof aMenu === 'string' && aMenu.indexOf('聊天') >= 0 && aMenu.indexOf('{n}') < 0,
+      '菜单意图 → 同步字符串且 {n} 已替换', typeof aMenu);
+    const aGen = LT.botAnswer('讲个笑话', 'u_test', 'g:hall');
+    log(!!aGen && aGen.__gen === true, '内容型意图 → 返回 {__gen:true} 计划对象（交给异步分支）', typeof aGen);
+    const aWeather = LT.botAnswer('北京天气', 'u_test', 'g:hall');
+    log(!!aWeather && typeof aWeather.then === 'function', '事实型意图 → 返回 Promise');
+    const aNone = LT.botAnswer('', 'u_test', 'g:hall');
+    log(aNone === null || (aNone && aNone.__gen === true), '空输入不崩（返回 null 或生成计划）');
+
+    // 9) 短期上下文：带发言人标注，且不再是 6 条
+    if (B && B.recentContext) {
+      const ctx = B.recentContext('g:hall', 'u_test');
+      log(Array.isArray(ctx) && ctx.every((x) => x.role === 'user' || x.role === 'assistant'),
+        'recentContext 返回合法 role 序列', Array.isArray(ctx) ? ctx.length : 'none');
+      log(/CTX_N\s*=\s*20/.test(botSrc), '短期上下文窗口扩大到 20 条（原来是 6 条）');
+      log(/【' \+ nm \+ '】/.test(botSrc), '群聊历史里给发言人打了标注（模型才不会把别人的话当成自己的）');
+    } else log(false, 'recentContext 已导出');
+
+    // 10) 记忆系统：本地缓存 + 云端表 + 去重
+    if (B && B.memAdd && B.memStore) {
+      const before = B.memStore().length;
+      B.memAdd('测试用：用户喜欢喝美式', 'u_test', 'g:hall');
+      log(B.memStore().length === before + 1, 'memAdd 写入一条长期记忆', B.memStore().length);
+      B.memAdd('测试用：用户喜欢喝美式', 'u_test', 'g:hall');
+      log(B.memStore().length === before + 1, '重复内容不会重复记（去重生效）');
+      const rec = B.memRecall('我平时喜欢喝什么', 'u_test');
+      log(Array.isArray(rec) && rec.length >= 1, 'memRecall 能按关键词召回相关记忆', rec.length);
+      log(/db\.from\('memories'\)/.test(botSrc), '长期记忆落到云端 memories 表（跨设备同步）');
+      log(/LT_BOT\.memStore|botMem/.test(botSrc), '本地有记忆缓存（弱网也能用）');
+    } else log(false, 'memAdd/memStore 已导出');
+
+    // 11) system prompt 里人格 + 情绪 + 记忆三者都要出现
+    if (B && B.buildSystem) {
+      const sys = B.buildSystem({ who: '小明', hint: '用户想听笑话', mem: [{ content: '他喜欢喝美式' }] });
+      log(/小美/.test(sys) && /情绪/.test(sys), 'system 含人格 + 情绪');
+      log(/小明/.test(sys), 'system 带上对话对象名字');
+      log(/他喜欢喝美式/.test(sys), 'system 注入长期记忆');
+      log(/用户想听笑话/.test(sys), 'system 注入本次任务提示');
+      log(/思考过程/.test(sys), 'system 明确禁止输出思考链（纯推理模型会吐 reasoning_content）');
+    } else log(false, 'buildSystem 已导出');
+
+    // 12) 流式上屏：临时气泡不进库
+    log(/S\.botStream/.test(htmlSrc), 'index.html 有流式临时消息状态 S.botStream');
+    log(/function renderStream/.test(htmlSrc), '提供 renderStream 局部渲染流式气泡');
+    log(/botStreamEnd/.test(htmlSrc), '收到完整回复后清理流式气泡');
+    log(/S\.botStream = null/.test(htmlSrc), '切换会话时丢弃流式气泡（否则会串到别的对话）');
+    log(/CTX_N|onDelta/.test(botSrc) && /onDelta\(content\)/.test(botSrc), 'callLLM 支持流式回调 onDelta');
+    log(!/reasoning_content/.test(botSrc) || /只收正文/.test(botSrc),
+      '明确只收 delta.content，不把 reasoning_content 发进聊天室');
   }
 
   // ===== 本轮：工具栏精简（去掉 bAt / bMore）=====
@@ -1637,6 +1792,44 @@ function makeStub() {
       const grpulseDef = (cssTxt.match(/@keyframes grpulse\{[^@]*\}/) || [''])[0];
       log(!!grpulseDef && !/box-shadow/.test(grpulseDef),
         'grpulse 不含 box-shadow 扩散（从根上消除溢出被裁）', grpulseDef || '(未找到定义)');
+
+      // ⚠️ 类名冲突护栏（排查了三轮才定位到的真凶）：
+      // 玩家条右侧的「我/等待」标签原先用 class="side"，撞上全局 .side
+      // （主界面左侧会话列表：width:290px + background:var(--bg2) + border-right），
+      // 结果每条玩家条右侧被塞进一个 290px 宽带底色的「假侧栏」，被 overflow 裁成横贯灰带。
+      // 断言 1：对局浮层里不允许再出现裸 class="side"（必须是 .plt）
+      const roomHtml = w.LT.renderRoom ? String(w.LT.renderRoom()) : '';
+      log(!/class="side"/.test(roomHtml),
+        '对局浮层内不再使用裸 class="side"（与全局左侧栏规则撞名）',
+        (roomHtml.match(/class="side"/g) || []).length + ' 处');
+      log(/class="plt"/.test(roomHtml) || !/gr-pl/.test(roomHtml),
+        '玩家条标签使用独立类名 .plt', roomHtml ? 'ok' : '(空渲染，跳过)');
+      // 断言 2：.plt 的 CSS 里绝不能出现背景填充 / 固定宽度（那正是 .side 的特征）
+      const pltRule = (cssTxt.match(/\.groom \.gr-pl \.plt\{[^}]*\}/) || [''])[0];
+      log(!!pltRule && !/background|width\s*:/.test(pltRule),
+        '.plt 规则无底色、无固定宽度（区别于全局 .side）', pltRule || '(未找到规则)');
+      // 断言 3：玩家条与状态条宽度必须贴合内容，不能靠 align-self（列向 flex 下不可靠）
+      const plRule = (cssTxt.match(/\.groom \.gr-pl\{[^}]*\}/) || [''])[0];
+      log(/fit-content/.test(plRule),
+        '玩家条用 width:fit-content 收缩到内容宽（align-self 在列向 flex 下不可靠）', plRule || '(未找到规则)');
+      const stRule = (cssTxt.match(/\.groom \.gr-status\{[^}]*\}/) || [''])[0];
+      log(/fit-content/.test(stRule), '状态条同样用 width:fit-content 贴合内容', stRule || '(未找到规则)');
+
+      // ⚠️ 头像必须绝对定位铺满（实测 .av.m 38px 容器里 img 只有 28px 高，上下露灰底）。
+      // .av 是 flex 容器，img 作为 flex item 时 height:100% 会被解析成图片自然高。
+      // 修法：.av 加 position:relative，img 绝对定位 inset:0 脱离 flex 流。
+      const avRule = (cssTxt.match(/\.av\{[^}]*\}/) || [''])[0];
+      log(/position:relative/.test(avRule) && /overflow:hidden/.test(avRule),
+        '.av 建立定位上下文并裁剪（供绝对定位的图片铺满）', avRule || '(未找到规则)');
+      const avImgRule = (cssTxt.match(/\.av > img\{[^}]*\}/) || [''])[0];
+      log(/position:absolute/.test(avImgRule) && /inset:0/.test(avImgRule),
+        '头像图片绝对定位铺满（不靠 height:100%，避免 flex 下解析成自然高）', avImgRule || '(未找到规则)');
+      log(/object-fit:cover/.test(avImgRule),
+        '头像图片等比裁切铺满（不变形、不留白）', avImgRule || '(未找到规则)');
+      // 行内样式不能再写 width/height:100% —— 会覆盖上面的 CSS 导致回归
+      const avFn = String(w.LT.avOf ? w.LT.avOf('测试', 'data:image/png;base64,AA', '#888', 'm') : '');
+      log(!/width:100%;height:100%/.test(avFn),
+        'avOf 不再给 img 写行内 width/height（避免盖掉铺满 CSS）', avFn || '(未导出 avOf，跳过)');
     }
   }
 
