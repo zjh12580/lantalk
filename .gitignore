@@ -21,5 +21,8 @@ desktop.ini
 # 素材原始图（含 AI 生成水印，仅本地保留；干净成品在 cloud/assets/gen/）
 cloud/assets/*.png
 
+# 本地密钥配置（TypeSafe 等第三方 key，只留在本机/部署环境）
+cloud/.typesafe.json
+
 # 项目云盘迁移提示（内容为指向本 Git 仓库的说明，仅本地产物，已单独放到云盘）
 CODE_GOES_TO_GIT.md

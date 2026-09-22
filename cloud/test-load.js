@@ -114,6 +114,9 @@ let __puts = [];               // 手动 PUT 兜底的调用记录
 let __weatherOk = true;        // open-meteo 天气源是否可用
 let __searchCalls = [];        // 联网检索源的调用记录
 let __searchOk = true;         // 检索源是否可用（false 时全部拒绝，验证优雅降级）
+let __intentOn = true;         // Jev 意图路由是否可用（服务端是否配了密钥）
+let __intentResp = null;       // 下一次 /api/intent 的返回（null 时用默认闲聊结果）
+let __intentCalls = [];        // /api/intent 请求记录
 // Keyless LLM 网关桩状态：默认给出与云上一致的目录（含 4 个 deepseek 候选）
 let __llmListCalls = 0;
 let __llmListFail = false;
@@ -252,6 +255,15 @@ function makeStub() {
               total_volume: 24279642149, last_updated: new Date().toISOString(),
             }]),
           });
+        }
+        // Jev 意图路由：GET 能力探测 + POST 意图判断（由用例通过 __intent 控制返回）
+        if (url.indexOf('/api/intent') >= 0) {
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, enabled: __intentOn, min_confidence: 0.6, model: 'jev-latest' }) });
+          }
+          __intentCalls.push(JSON.parse((o && o.body) || '{}'));
+          const r = __intentResp || { ok: true, intent: 'chitchat', confidence: 0.4, intent_confidence: 0.9, kind: 'none', has_asset: 0.05, crypto: '', crypto_confidence: 0 };
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(r) });
         }
         return Promise.reject(new Error('no network in test'));
       };
@@ -1526,6 +1538,49 @@ function makeStub() {
     log(/联网检索到的资料/.test(src2), 'system 提示里明确要求「优先依据资料回答、查不到就说查不到」');
     log(/await searchWeb\(/.test(src2), 'botReply 的闲聊分支会先 searchWeb 再喂模型');
     log(/S\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
+  }
+
+  // ===== Jev 意图路由（TypeSafe System One）=====
+  if (w.LT && w.LT.stockGuess) {
+    await sleep(350);   // 等启动时的能力探测完成
+    log(w.LT.INTENT.enabled === true, '启动后探测到 /api/intent 可用，Jev 路由开启');
+
+    log(w.LT.stockGuess('茅台现在多少钱了') === '茅台', 'stockGuess 从中文句子中剥离语气词/意图词', w.LT.stockGuess('茅台现在多少钱了'));
+    log(w.LT.stockGuess('@小美 帮我查下 600519 的股价') === '600519', 'stockGuess 保留代码/英文标的', w.LT.stockGuess('@小美 帮我查下 600519 的股价'));
+
+    // 加密货币意图 → 自动出行情卡片（不需要用户输入 #btc）
+    __intentResp = { ok: true, intent: 'crypto_quote', confidence: 0.91, intent_confidence: 0.94, kind: 'crypto', kind_confidence: 0.92, has_asset: 0.97, crypto: 'bitcoin', crypto_confidence: 0.95 };
+    const cardsA = D.querySelectorAll('#mList .cardmsg').length;
+    const hitCrypto = await w.LT.tryIntentAutoReply('比特币现在多少钱', 'c1');
+    await sleep(200);
+    log(hitCrypto === true, '「比特币现在多少钱」被识别为行情意图并消费（不再走闲聊）', String(hitCrypto));
+    log(D.querySelectorAll('#mList .cardmsg').length === cardsA + 1, '意图命中后自动贴出行情卡片');
+    const autoCard = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
+    log(!!autoCard && autoCard.textContent.indexOf('Bitcoin') >= 0, '自动卡片内容正确（Bitcoin 行情）', autoCard ? autoCard.textContent.replace(/\s+/g, ' ').slice(0, 90) : 'none');
+    log(__intentCalls.length >= 1 && typeof __intentCalls[__intentCalls.length - 1].text === 'string', '调用 /api/intent 时把原文交给服务端判断', JSON.stringify(__intentCalls[__intentCalls.length - 1]).slice(0, 120));
+
+    // 股票意图 → 走 smartbox 名称解析后出卡片
+    __intentResp = { ok: true, intent: 'stock_quote', confidence: 0.88, intent_confidence: 0.9, kind: 'stock', kind_confidence: 0.89, has_asset: 0.93, crypto: '', crypto_confidence: 0 };
+    const cardsB = D.querySelectorAll('#mList .cardmsg').length;
+    const hitStock = await w.LT.tryIntentAutoReply('茅台现在多少钱', 'c1');
+    await sleep(300);
+    log(hitStock === true && D.querySelectorAll('#mList .cardmsg').length === cardsB + 1, '「茅台现在多少钱」自动解析标的并出卡片', 'hit=' + hitStock);
+
+    // 闲聊 → 不消费，交回原有链路
+    __intentResp = { ok: true, intent: 'chitchat', confidence: 0.95, intent_confidence: 0.95, kind: 'none', kind_confidence: 0.9, has_asset: 0.02, crypto: '', crypto_confidence: 0 };
+    log((await w.LT.tryIntentAutoReply('今天心情不错呀', 'c1')) === false, '闲聊不被误判成功能（交回 DeepSeek 闲聊链路）');
+
+    // 低置信度 → 不触发（宁可不做，也不能乱贴卡片）
+    __intentResp = { ok: true, intent: 'crypto_quote', confidence: 0.42, intent_confidence: 0.5, kind: 'crypto', kind_confidence: 0.45, has_asset: 0.5, crypto: 'bitcoin', crypto_confidence: 0.42 };
+    log((await w.LT.tryIntentAutoReply('那个东西怎么样了', 'c1')) === false, '置信度不足（<0.6）时不触发任何功能');
+
+    // 服务端不可用 → 静默降级
+    __intentResp = { ok: false, reason: 'no_key' };
+    log((await w.LT.tryIntentAutoReply('比特币多少了', 'c1')) === false, '服务端返回 ok:false 时静默降级（不影响聊天）');
+
+    // 源码断言：闲聊分支确实先走意图路由
+    const src3 = html;
+    log(/await tryIntentAutoReply\(text, conv\)/.test(src3), 'botReply 闲聊分支前置调用 tryIntentAutoReply');
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));

@@ -1183,9 +1183,13 @@ function botReply(conv, text, who) {
     return;
   }
   if (ans === null) {
-    // 闲聊路径：小美先猜「要不要联网」，需要就先检索（手工 RAG），再把资料喂给 DeepSeek
+    // 闲聊路径：先问 Jev「这条消息想干什么」，命中预置功能就直接执行；
+    // 未命中/不可用再让小美猜「要不要联网」，需要就检索（手工 RAG），把资料喂给 DeepSeek
     botHoldTyping(conv);
     (async function () {
+      try {
+        if (await tryIntentAutoReply(text, conv)) { botStopTyping(); return; }
+      } catch (e) {}
       await ensureLLM();
       var out;
       if (S.llmModel) {
@@ -2580,6 +2584,78 @@ function handleHashCmd(text) {
   prom.then(function (card) { postCard(card); })
     .catch(function (e) { postCard({ err: (e && e.message) || '查询失败' }); });
 }
+// ---------- Jev 意图路由（TypeSafe System One）----------
+// 只有「@小美 / 私聊小美」的消息会经过这里。命中预置功能就直接出卡片；
+// 未命中、置信度不足或服务不可用，一律静默交回原有闲聊链路。
+var INTENT = { url: '/api/intent', enabled: false, min: 0.6, probed: false };
+function intentProbe() {
+  INTENT.probed = true;
+  fetch(INTENT.url, { method: 'GET' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      INTENT.enabled = !!(j && j.ok && j.enabled);
+      if (j && typeof j.min_confidence === 'number') INTENT.min = j.min_confidence;
+      if (INTENT.enabled) console.log('[intent] Jev 意图路由已启用，阈值 ' + INTENT.min + '，模型 ' + (j.model || '?'));
+    })
+    .catch(function () { INTENT.enabled = false; });
+}
+function jevIntent(text, conv) {
+  if (!INTENT.enabled) return Promise.resolve(null);
+  var list = (S.msgs[conv] || []).filter(function (m) { return m && m.type === 'text' && m.text && !m.revoked; });
+  var ctx = list.slice(-4).map(function (m) { return (m.sender_name || '') + ': ' + m.text; });
+  return fetch(INTENT.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text, context: ctx })
+  }).then(function (r) { return r.json(); })
+    .then(function (j) { return (j && j.ok) ? j : null; })
+    .catch(function () { return null; });
+}
+// 从中文句子里猜出股票名：去掉语气词/意图词，取最长的一段作为查询词
+var STOCK_STOP = /@小美|现在|今天|今日|目前|实时|最新|多少钱|多少|股价|价格|报价|行情|涨跌幅|涨跌|涨了|跌了|涨幅|跌幅|成交量|成交额|怎么样|如何|帮我|帮忙|看一下|看下|查一下|查下|搜一下|一下|呢|吗|啊|呀|的|了|个|看|查|搜|请/g;
+function stockGuess(text) {
+  var t = String(text || '').replace(/@小美/g, '').replace(STOCK_STOP, ' ')
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9.]/g, ' ').trim();
+  if (!t) return '';
+  var toks = t.split(/\s+/).filter(Boolean)
+    .map(function (x) { return x.replace(/^[.]+|[.]+$/g, ''); })
+    .filter(Boolean);
+  if (!toks.length) return '';
+  toks.sort(function (a, b) { return b.length - a.length; });
+  return toks[0].slice(0, 12);
+}
+function runCryptoIntent(it) {
+  if (!it.crypto || it.crypto_confidence < INTENT.min) return Promise.resolve(false);
+  return fetchCrypto(it.crypto).then(function (card) {
+    toast('已识别行情意图：' + it.crypto.toUpperCase() + '（' + Math.round(it.crypto_confidence * 100) + '%）');
+    postCard(card);
+    return true;
+  }).catch(function (e) {
+    postCard({ err: (e && e.message) || '查询失败' });
+    return true;
+  });
+}
+function runStockIntent(it, text) {
+  if (it.has_asset < INTENT.min) return Promise.resolve(false);
+  var q = stockGuess(text);
+  if (!q) return Promise.resolve(false);
+  return resolveStock(q).then(function (sec) {
+    return fetchStock(sec, q).then(function (card) {
+      toast('已识别股票意图：' + q + '（' + Math.round(it.confidence * 100) + '%）');
+      postCard(card);
+      return true;
+    });
+  }).catch(function () { return false; });   // 查不到标的就交回闲聊，不吞消息
+}
+function tryIntentAutoReply(text, conv) {
+  return jevIntent(text, conv).then(function (it) {
+    if (!it) return false;
+    if (it.intent === 'crypto_quote') return runCryptoIntent(it);
+    if (it.intent === 'stock_quote') return runStockIntent(it, text);
+    if (it.intent === 'help' && it.intent_confidence >= INTENT.min) { postCard(helpCard()); return true; }
+    return false;
+  }).catch(function () { return false; });
+}
 // 指令菜单浮层
 function renderCmdPop(list) {
   var pop = $('#cmdpop');
@@ -2882,8 +2958,16 @@ window.LT = {
   searchNeed: function (t) { return botSearchNeed(t); },
   searchWeb: function (q) { return searchWeb(q); },
   botSearch: function (t, who) { return botSearch(t, who); },
+  // 供测试断言 Jev 意图路由
+  get INTENT() { return INTENT; },
+  intentProbe: function () { return intentProbe(); },
+  jevIntent: function (t, c) { return jevIntent(t, c); },
+  stockGuess: function (t) { return stockGuess(t); },
+  tryIntentAutoReply: function (t, c) { return tryIntentAutoReply(t, c); },
 };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
+// 启动后探测意图路由能力（服务端未配置密钥时保持关闭，行为与之前完全一致）
+setTimeout(intentProbe, 200);
 function promptBox(title, val, ta, onOk) {
   openModal('<h3>' + esc(title) + '</h3>'
     + (ta ? '<textarea class="inp" id="pb" rows="4" style="resize:vertical">' + esc(val) + '</textarea>' : '<input class="inp" id="pb" value="' + esc(val) + '">')
