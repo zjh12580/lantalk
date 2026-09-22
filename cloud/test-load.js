@@ -117,6 +117,9 @@ let __searchOk = true;         // 检索源是否可用（false 时全部拒绝�
 let __intentOn = true;         // Jev 意图路由是否可用（服务端是否配了密钥）
 let __intentResp = null;       // 下一次 /api/intent 的返回（null 时用默认闲聊结果）
 let __intentCalls = [];        // /api/intent 请求记录
+let __agentOn = true;          // 小美智能体（/api/chat）是否可用
+let __agentCalls = [];         // /api/chat 请求记录
+let __agentResp = null;        // 自定义 /api/chat 返回（函数：(body) => obj）
 // Keyless LLM 网关桩状态：默认给出与云上一致的目录（含 4 个 deepseek 候选）
 let __llmListCalls = 0;
 let __llmListFail = false;
@@ -263,6 +266,17 @@ function makeStub() {
           }
           __intentCalls.push(JSON.parse((o && o.body) || '{}'));
           const r = __intentResp || { ok: true, intent: 'chitchat', confidence: 0.4, intent_confidence: 0.9, kind: 'none', has_asset: 0.05, crypto: '', crypto_confidence: 0 };
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(r) });
+        }
+        // 小美智能体（服务端 Agent）：GET 探活 + POST 主循环
+        if (url.indexOf('/api/chat') >= 0) {
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, enabled: __agentOn, primary: __agentOn ? 'deepseek-flash' : null, fallback: null }) });
+          }
+          __agentCalls.push(JSON.parse((o && o.body) || '{}'));
+          if (!__agentOn) return Promise.reject(new Error('agent down'));
+          const r = __agentResp ? __agentResp(JSON.parse((o && o.body) || '{}'))
+            : { ok: true, text: '（智能体回复）', trace: [], turns: 1, channel: 'deepseek' };
           return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(r) });
         }
         return Promise.reject(new Error('no network in test'));
@@ -692,7 +706,13 @@ function makeStub() {
       // 云上 DeepSeek 全是 onlyReasoning 推理模型：不能硬传 temperature，超时也要放宽
       log(!/stream:\s*true,\s*temperature:/.test(src), '不硬传 temperature（推理模型采样参数锁定，传了可能被拒）');
       const to = src.match(/var LLM_TIMEOUT = (\d+)/);
-      log(!!to && Number(to[1]) >= 40000, 'LLM_TIMEOUT ≥ 40s（适配推理模型首字延迟）', to ? to[1] + 's' : 'none');
+      // ⚠️ 30s 是有意的：botLLM 现在有「多模型回退链」（llmQueue × 带/不带温度），
+      //    单模型 30s 超时后会自动换下一个重试，总预算仍 < botHoldTyping 的 60s。
+      //    35s 以上反而会让「换模型重试」没机会执行就到 60s 预算上限。
+      log(!!to && Number(to[1]) >= 25000 && Number(to[1]) <= 45000,
+        'LLM_TIMEOUT 在 25~45s 区间（配合多模型回退链）', to ? to[1] + 's' : 'none');
+      // 回退链存在
+      log(/LLM_RETRY/.test(src) && /S\.llmQueue/.test(src), 'botLLM 有候选模型回退链（llmQueue + LLM_RETRY）');
       // 注意：源码里有两处 botTypingUntil（普通回复 1.5s / AI 长等待 60s），
       // 要取「AI 长等待」那个最大值，否则会误配到 1.5s
       const holds = Array.from(src.matchAll(/S\.botTypingUntil = Date\.now\(\) \+ (\d+)/g)).map((m) => Number(m[1]));
@@ -707,7 +727,8 @@ function makeStub() {
     //    但必须精确命中优先级最高的 deepseek-v4.1-flash（不是列表第一个）
     await sleep(300);
     if (LT && LT.ensureLLM) {
-      LT.S.llmTried = false; LT.S.llmModel = null;
+      // ⚠️ 重置必须用 llmReady（Promise 缓存），旧的 llmTried 布尔字段已废弃 —— 改它无效
+      LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
       __llmListCalls = 0;
       await LT.ensureLLM();
       log(LT.S.llmModel === 'deepseek-v4.1-flash',
@@ -715,7 +736,7 @@ function makeStub() {
       log(__llmListCalls === 1, '拉取模型目录 1 次', __llmListCalls);
       // 幂等：再调一次不应重复拉目录
       await LT.ensureLLM();
-      log(__llmListCalls === 1, 'ensureLLM 幂等（llmTried 生效，不重复拉目录）', __llmListCalls);
+      log(__llmListCalls === 1, 'ensureLLM 幂等（llmReady 缓存 Promise 生效，不重复拉目录）', __llmListCalls);
     } else {
       log(false, 'window.LT.ensureLLM 已导出', LT ? Object.keys(LT).join(',') : 'no LT');
     }
@@ -725,7 +746,9 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = saved.map((m) => (m.id === 'deepseek-v4.1-flash' ? { id: m.id, name: m.name, disabled: true } : m));
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        // ⚠️ 重置状态必须清「缓存的 Promise」而不是旧的 llmTried 布尔标志
+        //    （ensureLLM 已改为缓存 Promise 修并发竞态；只清 llmTried 会导致复用旧 Promise）
+        LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'deepseek-v4-flash', '首选被 disabled → 跳到次选', String(LT.S.llmModel));
       }
@@ -737,7 +760,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: true }];
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'glm-5.3', '目录无 deepseek → 兜底任意可用模型', String(LT.S.llmModel));
       }
@@ -764,8 +787,7 @@ function makeStub() {
     if (hallConv) hallConv.click();
     await sleep(800);
 
-    // 1) 工具栏按钮已是「游戏」图标；#bMore（更早消息）由 dev 分支恢复，与 #bGame 共存
-    log(D.querySelector('#bMore') !== null, '「更早消息」按钮保留在工具栏');
+    // 1) 工具栏含「游戏」图标按钮（#bMore 更早消息已按需求移除，见文件末尾工具栏断言）
     const bGame = D.querySelector('#bGame');
     log(!!bGame, '工具栏游戏图标按钮共存');
 
@@ -1262,19 +1284,17 @@ function makeStub() {
     const arr = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei');
     return arr.length > n0 ? arr[arr.length - 1].text : '(无回复)';
   }
-  const tJoke = await botTalk('@小美 讲个笑话');
-  log(tJoke.length > 10, '「讲个笑话」有回复', tJoke.slice(0, 30));
+    const tJoke = await botTalk('@小美 讲个笑话');
+    log(tJoke.length > 3 && tJoke !== '(无回复)', '「讲个笑话」有回复（走智能体）', tJoke.slice(0, 30));
   const tMenu = await botTalk('@小美 你能干什么');
-  log(tMenu.indexOf('笑话') >= 0 && tMenu.indexOf('古诗') >= 0 && tMenu.indexOf('天气') >= 0,
-    '问「你能干什么」输出技能菜单（带 6 个序号技能）', tMenu.slice(0, 40).replace(/\n/g, ' '));
-  const tNum = await botTalk('@小美 2');
-  log(tNum.length > 20 && tNum !== '(无回复)', '菜单后直接回复序号 2 -> 触发讲故事', tNum.slice(0, 30));
+  log(tMenu.indexOf('聊天') >= 0 || tMenu.indexOf('查资料') >= 0,
+    '问「你能干什么」给出能力说明', tMenu.slice(0, 40).replace(/\n/g, ' '));
   const tPoem = await botTalk('@小美 来首古诗');
-  log(tPoem.indexOf('《') >= 0, '「来首古诗」返回古诗（带书名号标题）', tPoem.slice(0, 24));
+  log(tPoem.length > 5 && tPoem !== '(无回复)', '「来首古诗」有回复（智能体生成，不再本地抽签）', tPoem.slice(0, 24));
   const tW = await botTalk('@小美 北京天气', 3200);
-  log(tW.indexOf('°C') >= 0 && tW.indexOf('北京') >= 0, '「北京天气」返回 open-meteo 真实天气', tW.slice(0, 40).replace(/\n/g, ' '));
+  log(tW.length > 3 && tW !== '(无回复)', '「北京天气」有回复', tW.slice(0, 40).replace(/\n/g, ' '));
   const tN = await botTalk('@小美 看看新闻', 3600);
-  log(tN.indexOf('新闻') >= 0, '「看新闻」有响应（测试环境源全挂 -> 走降级文案）', tN.slice(0, 36).replace(/\n/g, ' '));
+  log(tN.length > 3 && tN !== '(无回复)', '「看新闻」有响应', tN.slice(0, 36).replace(/\n/g, ' '));
 
   // ===== 本轮：手机端侧栏 ☰ / 遮罩 =====
   log(D.querySelector('#bSide') !== null, '侧栏 ☰ 展开按钮存在（窄屏下显示）');
@@ -1615,6 +1635,246 @@ function makeStub() {
     // 源码断言：闲聊分支确实先走意图路由
     const src3 = html;
     log(/await tryIntentAutoReply\(text, conv\)/.test(src3), 'botReply 闲聊分支前置调用 tryIntentAutoReply');
+  }
+
+  // ===== 小美回归修复（在 dev 单文件版上重新移植）：地名解析 / 并发竞态 / 联网问答 / 新闻兜底 / 去重 =====
+  {
+    const LT = w.LT;
+    const srcAll = html;   // 单文件版：index.html 即全部源码
+    // ⚠️ 扫源码前只剥「行首 // 注释」：注释里可能写着被禁用的旧标识，会反噬断言（踩过）
+    // ⚠️⚠️ 两条禁令，都是踩出来的：
+    //   1) 别用 /\/\/[^\n]*/g —— 会把字符串 'https://...' 里的 // 到行尾整段删掉，含 URL 的断言全假失败
+    //   2) 别剥块注释 /\/\*[\s\S]*?\*\//g —— HTML 里 /* 与 */ 数量不配对（正则字面量/字符串里有 */），
+    //      非贪婪跨段匹配会一次吞掉 7 万+ 字符，扫源码断言集体失灵
+    const code = srcAll.split('\n').map(function (l) { return l.replace(/^\s*\/\/.*$/, ''); }).join('\n');
+
+    // 1) 天气地名解析：时间词/动词/语气词双向剥离（真因：原正则把「明天上海」整段当地名）
+    if (LT && LT.parseCity) {
+      [['明天上海天气', '上海'], ['今天北京天气', '北京'], ['上海天气', '上海'],
+       ['帮我查一下 深圳 天气', '深圳'], ['广州今天多少度', '广州'], ['明天上海会不会下雨', '上海']]
+        .forEach(function (c) {
+          const hit = LT.parseCity(c[0]);
+          log(hit === c[1], '天气解析「' + c[0] + '」→ ' + c[1], '实际=' + hit);
+        });
+    } else log(false, 'window.LT.parseCity 已导出');
+
+    // 2) ⚠️⚠️ 真凶回归：ensureLLM 缓存 Promise 而非布尔标志（修并发竞态）
+    log(!/S\.llmTried/.test(code) && /if \(S\.llmReady\) \{ await S\.llmReady; return; \}/.test(code),
+      'ensureLLM 缓存 Promise 而非布尔值（修并发竞态：曾致 1 秒秒回「卡了一下」+ 天气回两次）',
+      /S\.llmTried/.test(code) ? '代码里还有 llmTried' : 'ok');
+    if (LT && LT.ensureLLM) {
+      const savedR = LT.S.llmReady, savedM = LT.S.llmModel, savedQ = LT.S.llmQueue;
+      LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
+      const callsBefore = __llmListCalls;
+      const p1 = LT.ensureLLM(), p2 = LT.ensureLLM();
+      await Promise.all([p1, p2]);
+      log(LT.S.llmModel === 'deepseek-v4.1-flash',
+        '并发两次 ensureLLM：await 后模型已就绪（不会秒回兜底）', String(LT.S.llmModel));
+      log(__llmListCalls - callsBefore <= 1, '并发调用不重复拉模型目录',
+        'delta=' + (__llmListCalls - callsBefore));
+      log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue.length >= 2,
+        '候选模型队列含多个（保证有回退目标）', Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.length : 0);
+      LT.S.llmReady = savedR; LT.S.llmModel = savedM; LT.S.llmQueue = savedQ;
+    }
+
+    // 3) 天气主流程已改用 parseCity（不再用内联正则）
+    log(/var city = parseCity\(text\)/.test(code), 'botWeather 改用 parseCity 解析地名');
+
+    // 4) 新闻源换血 + 联网兜底（原三源实测 curl 000 全挂）
+    log(/60s-api\.viki\.moe/.test(code), 'NEWS_SOURCES 首位换成 viki.moe（原三源已失效）');
+    log(/function botNewsFallback/.test(code), '新闻/热点失败时走联网检索+模型总结兜底');
+    log(!/新闻源今天集体打不通了/.test(code), '已删除「新闻源今天集体打不通了」的硬报错文案');
+
+    // 5) 智能体重构：本地正则路由已移除，自然语言全部交给服务端 Agent
+    log(!/var LOOKUP_RE = /.test(code), 'LOOKUP_RE 已移除（不再靠正则猜「要联网」）');
+    log(/function botAgent\(/.test(code) && /\/api\/chat/.test(code),
+      '新增 botAgent：把自然语言交给服务端 Agent 理解');
+    log(/var AGENT_STATE = \{/.test(code) && /function agentProbe\(/.test(code),
+      '新增 AGENT_STATE + agentProbe（启动探测智能体可用性）');
+    log(/return null;\n\}/.test(code) && /var BOT_MENU = /.test(code),
+      'botAnswer 只保留能力菜单，其余 return null 交给 Agent');
+    log(!/if \(\/笑话\|段子\|逗我\|冷知识\/\.test\(t\)\) return botJoke/.test(code),
+      '已移除 /笑话|段子/ 这类硬编码关键词分支（理解能力差的根因）');
+    log(/if \(await tryIntentAutoReply\(text, conv\)\)/.test(code) && /var ag = await botAgent\(text, who, conv\)/.test(code),
+      'botReply 分层：预置功能 → Agent 主通道 → 旧链路兜底');
+    if (LT && LT.sanitizeQuery) {
+      log(LT.sanitizeQuery('@小美 查一下 HTTP 状态码') === 'HTTP 状态码',
+        'sanitizeQuery（旧链路兜底仍在）', LT.sanitizeQuery('@小美 查一下 HTTP 状态码'));
+    } else log(false, 'window.LT.sanitizeQuery 已导出');
+
+    // 6) 回复去重：同一条消息只回一次（治「天气回两次」的另一半）
+    log(/var BOT_REPLIED = \{\}/.test(code) && /function botDedupe/.test(code),
+      'maybeBotReply 增加按消息 id 去重（BOT_REPLIED + botDedupe）');
+    log(/if \(!botDedupe\(m\.conv, m\.id\)\) return;/.test(code), 'maybeBotReply 在调用 botReply 前做去重守卫');
+
+    // 7) 多模型回退链
+    log(/LLM_RETRY/.test(code) && /S\.llmQueue\.slice\(\)/.test(code),
+      'botLLM 有候选模型回退链（模型 × 带/不带 temperature）');
+  }
+
+  // ===== 本轮：工具栏精简（去掉 bAt / bMore）=====
+  log(D.querySelector('#bAt') === null, '工具栏「@某人」按钮已移除');
+  log(D.querySelector('#bMore') === null, '工具栏「更早消息」按钮已移除');
+  log(!!D.querySelector('#bGame') && !!D.querySelector('#bCmd') && !!D.querySelector('#bEmo') && !!D.querySelector('#bImg') && !!D.querySelector('#bFile'),
+    '其余工具栏按钮仍在（游戏 / # / 表情 / 图片 / 文件）');
+
+  // ===== 本轮：输入 @ 弹群成员列表，Enter = 确认艾特（不是发送）=====
+  {
+    const hallConv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+    if (hallConv) hallConv.click();
+    await sleep(700);
+    const inp = D.querySelector('#input');
+    const mpop = D.querySelector('#mpop');
+    const msgCountBefore = D.querySelectorAll('#mList .m').length;
+
+    // 清空后输入 @ → 弹出成员列表
+    inp.value = '@';
+    inp.selectionStart = inp.selectionEnd = 1;
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(120);
+    log(!mpop.classList.contains('hidden'), '输入 @ 弹出成员列表');
+    const items = mpop.querySelectorAll('.mitem');
+    log(items.length >= 2, '@ 列表里列出了群成员', items.length + ' 人');
+    log(Array.prototype.some.call(items, (it) => /我$/.test(it.textContent.trim()) || it.textContent.indexOf('我') >= 0),
+      '列表里能认出自己（带「我」标记）');
+
+    // ↑↓ 能切换高亮
+    const firstOn = mpop.querySelectorAll('.mitem.on')[0];
+    inp.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await sleep(60);
+    const secondOn = mpop.querySelectorAll('.mitem.on')[0];
+    log(!!firstOn && !!secondOn && firstOn !== secondOn, '↓ 键切换成员高亮');
+    log(mpop.querySelectorAll('.mitem.on').length === 1, '任意时刻只有一个成员处于预选高亮');
+
+    // 弹层靠左对齐输入框（不居中）
+    {
+      const pr = D.querySelector('#pPill').getBoundingClientRect();
+      const mr = mpop.getBoundingClientRect();
+      log(Math.abs(mr.left - pr.left) <= 3, '@ 成员列表左边缘对齐输入框（靠左显示）',
+        'popLeft=' + Math.round(mr.left) + ' pillLeft=' + Math.round(pr.left));
+    }
+
+    // Enter = 确认艾特（关键：绝不能发送消息）
+    const targetName = secondOn.querySelector('span').textContent.trim();
+    inp.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(160);
+    log(inp.value === '@' + targetName + ' ', 'Enter 把选中成员写进输入框（@昵称+空格）', JSON.stringify(inp.value));
+    log(mpop.classList.contains('hidden'), '确认后成员列表自动收起');
+    log(D.querySelectorAll('#mList .m').length === msgCountBefore, 'Enter 确认艾特时没有发送消息（消息数不变）');
+
+    // 补几个字再发送 → 正常发出且带 mentions
+    inp.value = '@' + targetName + ' 你好呀';
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    await sleep(60);
+    log(D.querySelector('#mpop').classList.contains('hidden'), '昵称后已有空格，不再重复弹成员列表');
+    D.querySelector('#bSend').click();
+    await sleep(400);
+    const atMsgs = DATA.messages.filter((m) => m.conv === 'g:hall' && /你好呀$/.test(m.text || '') && (m.mentions || []).length);
+    log(atMsgs.length >= 1, '发送后 @提及被解析成 mentions 落库', atMsgs.length ? JSON.stringify(atMsgs[atMsgs.length - 1].mentions) : 'none');
+
+    // 私聊里输入 @ 不应弹成员列表
+    const priv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
+    if (priv) {
+      priv.click();
+      await sleep(500);
+      const inp2 = D.querySelector('#input');
+      D.querySelector('#mpop').classList.add('hidden');
+      inp2.value = '@';
+      inp2.selectionStart = inp2.selectionEnd = 1;
+      inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
+      await sleep(120);
+      log(D.querySelector('#mpop').classList.contains('hidden'), '私聊里输入 @ 不弹成员列表');
+      inp2.value = ''; inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
+    }
+  }
+
+  // ===== 本轮：对局浮层左右分栏（信息在左、棋盘在右）=====
+  {
+    const body = D.querySelector('#groom .gr-body');
+    if (body) {
+      log(!!D.querySelector('#groom .gr-side'), '对局浮层含左侧信息栏 .gr-side');
+      log(!!D.querySelector('#groom .gr-main'), '对局浮层含右侧棋盘区 .gr-main');
+      const hint = D.querySelector('#groom #grHint');
+      if (hint) log(hint.classList.contains('gr-status'), '轮次/提示文案放在左侧 .gr-status 里');
+
+      // 棋盘等比自适应：jsdom 不做布局（clientHeight 恒为 0），无法断言真实像素，
+      // 这里只验证「宽度确实参与 --bh 约束」这一 CSS 契约 + fitBoard 在无布局时不误写坏值。
+      const main = D.querySelector('#groom .gr-main');
+      const cvb = D.querySelector('#gboard, #gBoard');
+      log(!!cvb && typeof w.LT.fitBoard === 'function', '导出 fitBoard 供棋盘自适应调用');
+      log(!!cvb && /--bh/.test(cvb.getAttribute('style') || '') === false,
+        '棋盘自身不写死尺寸（由 CSS width:min() 控制）');
+      log(!!main && main.style.getPropertyValue('--bh') === '',
+        'jsdom 无布局时不再写入 --bh（不会残留坏值）', main ? JSON.stringify(main.style.getPropertyValue('--bh')) : 'no main');
+
+      // 选中玩家条不能有背景填充（border + inset 描边会在圆角内侧叠出深色块，用户反馈多次）
+      const cssTxt = Array.prototype.map.call(D.querySelectorAll('style'), (s) => s.textContent).join('\n');
+      const onRule = (cssTxt.match(/\.groom \.gr-pl\.on\{[^}]*\}/) || [''])[0];
+      log(!!onRule && !/background|color-mix/.test(onRule),
+        '选中玩家条只改边框/文字色，无背景填充', onRule || '(未找到规则)');
+      log(!!onRule && !/box-shadow/.test(onRule),
+        '选中玩家条不再叠第二层描边（避免圆角内侧深色块）', onRule ? 'ok' : '(未找到规则)');
+
+      // 指示点动画不能用带 box-shadow 扩散的 livepulse（红色光环会被 overflow 裁成脏弧线）
+      const dotRule = (cssTxt.match(/\.groom \.gr-pl\.on \.dot\{[^}]*\}/) || [''])[0];
+      log(!/livepulse/.test(dotRule), '玩家条指示点不再复用直播红点动画 livepulse', dotRule || '(未找到规则)');
+      log(/grpulse/.test(dotRule), '玩家条指示点改用纯透明度呼吸动画 grpulse', dotRule || '(未找到规则)');
+      const grpulseDef = (cssTxt.match(/@keyframes grpulse\{[^@]*\}/) || [''])[0];
+      log(!!grpulseDef && !/box-shadow/.test(grpulseDef),
+        'grpulse 不含 box-shadow 扩散（从根上消除溢出被裁）', grpulseDef || '(未找到定义)');
+    }
+  }
+
+  // ===== 智能体重构：小美接入服务端 Agent 主循环 =====
+  {
+    const LT = w.LT;
+    // 探活
+    await sleep(500);
+    __agentCalls = [];
+    __agentOn = true;
+    // botAnswer 只保留能力菜单，其余交 Agent
+    if (LT) {
+      const aMenu = LT.botAnswer ? LT.botAnswer('你能干什么', '甲', 'g:hall') : null;
+      log(typeof aMenu === 'string' && aMenu.length > 6, 'botAnswer 仍返回能力菜单（固定回答）', String(aMenu).slice(0, 30));
+      const aChat = LT.botAnswer ? LT.botAnswer('我最近压力好大，想辞职', '甲', 'g:hall') : 'x';
+      log(aChat === null, 'botAnswer 对自然语言返回 null（交给 Agent 理解，不再正则猜）', String(aChat));
+      const aJoke = LT.botAnswer ? LT.botAnswer('讲个笑话', '甲', 'g:hall') : 'x';
+      log(aJoke === null, '「讲个笑话」也走 Agent（本地不再抽签）', String(aJoke));
+    } else log(false, 'window.LT 已导出');
+
+    // 端到端：@小美 触发 -> 前端调 /api/chat -> 回复落到消息表
+    const hallInput = D.querySelector('#input');
+    // 切到大厅
+    const hallConv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
+    if (hallConv) { hallConv.click(); await sleep(400); }
+    __agentResp = () => ({ ok: true, text: '压力大的时候先别急着做决定，跟我说说具体是哪一块最难受？', trace: [{ tool: 'web_search', args: { query: 'x' }, ok: true }], turns: 2, channel: 'deepseek' });
+    if (hallInput) {
+      hallInput.value = '@小美 我最近压力好大';
+      hallInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+      hallInput.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(2800);
+    }
+    const botMsgs = DATA.messages.filter((m) => m.sender_id === 'bot_xiaomei');
+    const lastBot = botMsgs.length ? String(botMsgs[botMsgs.length - 1].text) : '';
+    log(lastBot.indexOf('压力大') >= 0, 'Agent 回复已落库并上屏', lastBot.slice(0, 40));
+    log(__agentCalls.length >= 1, '前端确实调用了 /api/chat（服务端 Agent）', __agentCalls.length + ' 次');
+    const lastCall = __agentCalls[__agentCalls.length - 1] || {};
+    log(typeof lastCall.text === 'string' && lastCall.text.length > 0, '请求体带上用户原文', String(lastCall.text).slice(0, 30));
+    log(Array.isArray(lastCall.history), '请求体带上会话历史（模型才能理解上下文）', typeof lastCall.history);
+
+    // Agent 挂掉 -> 优雅回退（不抛异常、不刷屏）
+    __agentOn = false;
+    __agentResp = null;
+    const errN0 = errors.length;
+    const hallInput2 = D.querySelector('#input');
+    if (hallInput2) {
+      hallInput2.value = '@小美 你好呀';
+      hallInput2.dispatchEvent(new w.Event('input', { bubbles: true }));
+      hallInput2.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(2600);
+    }
+    log(errors.length === errN0, 'Agent 不可用时不产生 JS 异常（静默回退旧链路）', errors.slice(errN0).join(' | '));
+    __agentOn = true;
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));

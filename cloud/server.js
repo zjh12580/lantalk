@@ -2,6 +2,7 @@
  * LanTalk 云端版服务端
  * - 托管 cloud/index.html 静态页面
  * - POST /api/intent  →  TypeSafe AI (Jev) 意图识别代理（密钥只留服务端）
+ * - POST /api/chat    →  小美智能体（Agent 主循环：模型自主决定联网/调工具）
  *
  * 环境变量：
  *   PORT                 监听端口（默认 8080）
@@ -9,13 +10,17 @@
  *   TYPESAFE_BASE_URL    TypeSafe API 基地址（默认 https://api.typesafe.ai，测试可指向 mock）
  *   TYPESAFE_MODEL       模型名（默认 jev-latest）
  *   INTENT_MIN_CONF      最低置信度阈值（默认 0.6）
+ *   DEEPSEEK_API_KEY     小美主通道（DeepSeek 官方直连）。缺失时自动降级到云端网关
+ *   DEEPSEEK_BASE_URL    覆盖 DeepSeek 基地址（默认 https://api.deepseek.com）
+ *   DEEPSEEK_MODEL       覆盖主通道模型（默认 deepseek-chat）
  *
- * 密钥优先级：环境变量 > cloud/.typesafe.json（该文件已 gitignore，不会进仓库）
+ * 密钥优先级：环境变量 > cloud/.typesafe.json / cloud/.deepseek.json（均已 gitignore，不会进仓库）
  */
 'use strict';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const AGENT = require('./agent.js');
 
 const ROOT = __dirname;
 
@@ -25,13 +30,28 @@ function readLocalConfig() {
     return JSON.parse(fs.readFileSync(path.join(ROOT, '.typesafe.json'), 'utf8'));
   } catch (e) { return {}; }
 }
+function readDeepseekConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(ROOT, '.deepseek.json'), 'utf8'));
+  } catch (e) { return {}; }
+}
 const LOCAL = readLocalConfig();
+const DS = readDeepseekConfig();
 
 const PORT = process.env.PORT || LOCAL.port || 8080;
 const API_KEY = process.env.TYPESAFE_API_KEY || LOCAL.api_key || '';
 const BASE_URL = (process.env.TYPESAFE_BASE_URL || LOCAL.base_url || 'https://api.typesafe.ai').replace(/\/+$/, '');
 const MODEL = process.env.TYPESAFE_MODEL || LOCAL.model || 'jev-latest';
 const MIN_CONF = parseFloat(process.env.INTENT_MIN_CONF || LOCAL.min_confidence || '0.6');
+
+// 小美主通道：DeepSeek 官方直连（非推理模型，首字快、理解好、不吐思考链）
+const DS_KEY = process.env.DEEPSEEK_API_KEY || DS.api_key || '';
+const DS_BASE = (process.env.DEEPSEEK_BASE_URL || DS.base_url || 'https://api.deepseek.com').replace(/\/+$/, '');
+const DS_MODEL = process.env.DEEPSEEK_MODEL || DS.model || 'deepseek-flash';
+// 云端 Keyless 网关（回退通道，免密钥）
+const GW_BASE = (process.env.LLM_GATEWAY_BASE_URL || '').replace(/\/+$/, '');
+const GW_KEY = process.env.LLM_GATEWAY_API_KEY || '';
+const GW_MODEL = process.env.LLM_GATEWAY_MODEL || 'glm-5.3-flash';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -285,6 +305,119 @@ function send(res, code, obj) {
   res.end(body);
 }
 
+/* ---------------------------------------------------------------------------
+ * 小美智能体：统一的 OpenAI 兼容 chat 适配器
+ *   - 主通道：DeepSeek 官方直连（支持 function-calling、流式）
+ *   - 回退：云端 Keyless 网关（同一协议）
+ * 返回统一结构 {content, tool_calls, model}
+ * -------------------------------------------------------------------------*/
+
+function sseLine(obj) { return 'data: ' + JSON.stringify(obj) + '\n\n'; }
+
+/** 把上游 OpenAI 兼容流的 chunk 累积成 {content, tool_calls} */
+function accumulateChunk(acc, chunk) {
+  if (!chunk || !chunk.choices || !chunk.choices[0]) return;
+  const d = chunk.choices[0].delta || {};
+  // ⚠️ 只收 content（推理模型的 reasoning_content 是思考链，不能发进聊天室）
+  if (typeof d.content === 'string' && d.content) acc.content += d.content;
+  if (Array.isArray(d.tool_calls)) {
+    d.tool_calls.forEach((tc) => {
+      const i = typeof tc.index === 'number' ? tc.index : acc.tool_calls.length;
+      if (!acc.tool_calls[i]) acc.tool_calls[i] = { id: '', name: '', arguments: '' };
+      const slot = acc.tool_calls[i];
+      if (tc.id) slot.id = tc.id;
+      if (tc.function) {
+        if (tc.function.name) slot.name = tc.function.name;
+        if (typeof tc.function.arguments === 'string') slot.arguments += tc.function.arguments;
+      }
+    });
+  }
+}
+
+/**
+ * 调一个 OpenAI 兼容端点。stream=true 时用 SSE 逐块累积，可选 onDelta 回调正文增量。
+ * @returns {Promise<{content,tool_calls,model}>}
+ */
+async function callOpenAICompat(opt) {
+  const { base, key, model, messages, tools, disableTools, onDelta, timeoutMs } = opt;
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), timeoutMs || AGENT.DEFAULT_TIMEOUT);
+  const body = { model, messages, stream: true };
+  if (tools && tools.length && !disableTools) { body.tools = tools; body.tool_choice = 'auto'; }
+  try {
+    const r = await fetch(base.replace(/\/+$/, '') + '/chat/completions', {
+      method: 'POST',
+      signal: ac.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + key,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error('upstream ' + r.status + ' ' + String(t).slice(0, 200));
+    }
+    const acc = { content: '', tool_calls: [] };
+    if (!r.body || typeof r.body.getReader !== 'function') {
+      // 无流能力：整包解析
+      const j = await r.json();
+      const ch = (j.choices && j.choices[0]) || {};
+      const msg = ch.message || {};
+      return { content: msg.content || '', tool_calls: (msg.tool_calls || []).map((t) => ({ id: t.id, name: t.function && t.function.name, arguments: t.function && t.function.arguments })), model: j.model || model };
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder('utf-8');
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line || line.indexOf('data:') !== 0) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        let chunk;
+        try { chunk = JSON.parse(payload); } catch (e) { continue; }
+        const before = acc.content.length;
+        accumulateChunk(acc, chunk);
+        if (onDelta && acc.content.length > before) onDelta(acc.content.slice(before));
+      }
+    }
+    const calls = acc.tool_calls.filter((t) => t && t.name).map((t, i) => ({
+      id: t.id || ('call_' + i), name: t.name, arguments: t.arguments || '{}',
+    }));
+    return { content: acc.content, tool_calls: calls, model };
+  } finally { clearTimeout(to); }
+}
+
+/** Agent 用的 chat 函数：主通道失败自动回退网关 */
+function makeChatFn(preferStream) {
+  return async function chat(req) {
+    const opts = {
+      messages: req.messages,
+      tools: req.tools,
+      disableTools: req.disableTools,
+      onDelta: req.onDelta,
+    };
+    const errors = [];
+    if (DS_KEY) {
+      try {
+        return await callOpenAICompat(Object.assign({ base: DS_BASE, key: DS_KEY, model: DS_MODEL }, opts));
+      } catch (e) { errors.push('deepseek: ' + e.message); }
+    }
+    if (GW_BASE && GW_KEY) {
+      try {
+        return await callOpenAICompat(Object.assign({ base: GW_BASE, key: GW_KEY, model: GW_MODEL }, opts));
+      } catch (e) { errors.push('gateway: ' + e.message); }
+    }
+    throw new Error(errors.length ? errors.join(' | ') : 'no_llm_channel_configured');
+  };
+}
+
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     let n = 0; const chunks = [];
@@ -325,6 +458,42 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.warn('[intent]', e.message);
       return send(res, 200, { ok: false, reason: 'upstream', detail: String(e.message || e).slice(0, 200) });
+    }
+  }
+
+  // 小美智能体：GET 探活（是否有可用模型通道）
+  if (url.pathname === '/api/chat' && req.method === 'GET') {
+    return send(res, 200, {
+      ok: true,
+      enabled: !!(DS_KEY || (GW_BASE && GW_KEY)),
+      primary: DS_KEY ? DS_MODEL : null,
+      fallback: (GW_BASE && GW_KEY) ? GW_MODEL : null,
+    });
+  }
+  if (url.pathname === '/api/chat' && req.method === 'POST') {
+    if (!DS_KEY && !(GW_BASE && GW_KEY)) return send(res, 200, { ok: false, reason: 'no_llm_channel' });
+    let payload;
+    try { payload = JSON.parse((await readBody(req, 128 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { ok: false, reason: 'bad_json' }); }
+    const text = String(payload.text || '').trim();
+    if (!text) return send(res, 400, { ok: false, reason: 'empty_text' });
+    const ck = 'ch:' + text + '|' + String(payload.who || '') + '|' + (payload.history || []).slice(-4).map((m) => String(m.content || '').slice(0, 80)).join('~');
+    const hit = cacheGet(ck);
+    if (hit) return send(res, 200, Object.assign({ cached: true }, hit));
+    try {
+      const out = await AGENT.runAgent({ chat: makeChatFn(true) }, {
+        text,
+        who: payload.who,
+        scene: payload.scene,
+        mood: payload.mood,
+        memory: payload.memory,
+        history: Array.isArray(payload.history) ? payload.history : [],
+      });
+      if (out && out.ok) cacheSet(ck, out);
+      return send(res, 200, Object.assign({ channel: DS_KEY ? 'deepseek' : 'gateway' }, out));
+    } catch (e) {
+      console.warn('[chat]', e.message);
+      return send(res, 200, { ok: false, fallback: true, reason: 'upstream', detail: String(e.message || e).slice(0, 300) });
     }
   }
 
@@ -388,8 +557,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (require.main === module) {
-  server.listen(PORT, () => {
-    console.log('[cloud] listening on :' + PORT + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)') + '  model=' + MODEL);
+  // ⚠️ 必须绑 0.0.0.0：部署环境通过反向代理访问单端口，只绑 localhost 会导致外部连不上
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log('[cloud] listening on 0.0.0.0:' + PORT + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)') + '  model=' + MODEL);
   });
 }
 module.exports = { server, QUESTIONS, shapeAnswer, ANALYZE_QUESTIONS, shapeAnalyze };
