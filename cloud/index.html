@@ -447,6 +447,17 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .card .cv.flat{color:var(--tx2)}
 .card .cfoot{font-size:10px;color:var(--tx3);padding:6px 12px;border-top:1px solid var(--bd);text-align:center;white-space:pre-wrap;line-height:1.4}
 .card.err .cbody{padding:12px;text-align:center;color:var(--danger);display:block}
+/* 聊天洞察：建议话术（点击整行填入输入框） */
+.card.wplans{width:min(400px,86vw)}
+.card .plans{padding:9px 12px 11px;border-top:1px solid var(--bd);background:var(--bg)}
+.card .plh{font-size:11px;color:var(--tx3);margin-bottom:7px;letter-spacing:.2px}
+.card .plan{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;margin-top:6px;border:1px solid var(--bd);border-radius:10px;background:var(--bg3);cursor:pointer;transition:border-color .15s ease,background .15s ease,transform .08s ease}
+.card .plan:first-child{margin-top:0}
+.card .plan:hover{border-color:var(--brand)}
+.card .plan:active{transform:scale(.985)}
+.card .pt{flex:1;min-width:0;font-size:12.5px;line-height:1.5;color:var(--tx);word-break:break-word}
+.card .pfill{flex:0 0 auto;align-self:center;font-size:11px;line-height:1.6;color:var(--brand);border:1px solid var(--brand);border-radius:999px;padding:0 8px;white-space:nowrap;transition:background .15s ease,color .15s ease}
+.card .plan:hover .pfill{background:var(--brand);color:#fff}
 /* 聊天洞察卡片：评分条 + 情绪标签 */
 .card .mrow{display:flex;align-items:center;gap:8px;padding:7px 0}
 .card .mlab{flex:0 0 auto;width:58px;font-size:12px;color:var(--tx2);font-weight:600}
@@ -2368,7 +2379,7 @@ function renderMsgs(scroll) {
   if (lm) lm.onclick = function () { loadHistory(S.cur, (list[0] || {}).id); };
   $$('#mList .ops button').forEach(function (b) { b.onclick = function () { msgAct(b.dataset.a, b.dataset.i); }; });
   $$('#mList .rd[data-r]').forEach(function (el) { el.onclick = function () { showReadDetail(el.dataset.r); }; });
-  $$('#mList .planbtn').forEach(function (b) { b.onclick = function (ev) { ev.stopPropagation(); planAct(b.getAttribute('data-act'), b); }; });
+  $$('#mList .plan').forEach(function (el) { el.onclick = function (ev) { ev.stopPropagation(); planAct(el.getAttribute('data-act'), el); }; });
   $$('#mList .mav').forEach(function (a) {
     var uid = a.dataset.u;
     if (!uid || uid === S.uid || uid === 'system') { a.style.cursor = 'default'; return; }
@@ -2532,29 +2543,25 @@ function cardHtml(json) {
   var rows = (c.rows || []).map(function (r) {
     return '<div class="crow"><span class="ck">' + esc(r.k) + '</span><span class="cv ' + (r.cls || '') + '">' + esc(r.v) + '</span></div>';
   }).join('');
-  var plans = (c.plans && c.plans.length) ? '<div class="plans"><div class="plh">💡 可以这样说（复制或填入输入框）</div>' + c.plans.map(function (t) {
-    return '<div class="plan"><span class="pt">' + esc(t) + '</span><span class="pacts">' +
-      '<button class="planbtn" data-act="copy" data-text="' + attr(t) + '">复制</button>' +
-      '<button class="planbtn" data-act="fill" data-text="' + attr(t) + '">填入</button></span></div>';
+  var plans = (c.plans && c.plans.length) ? '<div class="plans"><div class="plh">💡 可以这样说</div>' + c.plans.map(function (t) {
+    return '<div class="plan" data-act="fill" data-text="' + attr(t) + '">' +
+      '<span class="pt">' + esc(t) + '</span>' +
+      '<span class="pfill">填入</span></div>';
   }).join('') + '</div>' : '';
-  return '<div class="card">' +
+  return '<div class="card' + (plans ? ' wplans' : '') + '">' +
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
     (c.sub ? '<div class="csub">' + esc(c.sub) + '</div>' : '') + '</div></div>' +
     '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + '</div>' +
     (c.foot ? '<div class="cfoot">' + esc(c.foot) + '</div>' : '') + plans + '</div>';
 }
-function planAct(act, btn) {
-  var t = btn.getAttribute('data-text') || '';
-  if (act === 'copy') {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(t).then(function () { toast('已复制'); }, function () { toast('复制失败', 'err'); });
-    } else { toast('当前环境不支持复制', 'err'); }
-  } else if (act === 'fill') {
-    var el = $('#input');
-    if (el) { el.value = t; el.focus(); if (typeof autoH === 'function') autoH(); }
-    toast('已填入输入框');
-  }
+function planAct(act, el) {
+  if (act !== 'fill') return;
+  var t = el.getAttribute('data-text') || '';
+  if (!t) return;
+  var inp = $('#input');
+  if (inp) { inp.value = t; inp.focus(); if (typeof autoH === 'function') autoH(); }
+  toast('已填入输入框，可继续编辑后发送');
 }
 function parseHash(text) {
   var s = String(text || '').trim().replace(/^#/, '');
