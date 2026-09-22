@@ -4,18 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { JSDOM, VirtualConsole } = require('jsdom');
 
-const rawHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-const errors_early = [];
-// ⚠️ bot.js 是外链脚本，jsdom 默认不加载本地相对路径的外链（且 runScripts:'dangerously' 下
-//    会静默跳过）→ 测试前把 <script src="bot.js?v=N"> 就地替换成内联内容。
-//    这样既保持线上「独立文件 + 版本号」的形态，测试也能覆盖模块真实代码。
-const botSrc = fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
-const html = rawHtml.replace(
-  /<script\s+src="bot\.js(?:\?[^"]*)?"><\/script>/i,
-  '<script>\n' + botSrc.replace(/<\/script>/gi, '<\\/script>') + '\n</script>'
-);
-if (html === rawHtml) errors_early.push('index.html 里找不到 <script src="bot.js?v=...">，小美模块未被内联');
-
+const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 const errors = [];
 let pass = 0, fail = 0;
 const log = (ok, name, extra) => {
@@ -34,7 +23,6 @@ const DATA = {
   messages: [],
   live: [],
   games: [],
-  memories: [],
 };
 let seq = 0;
 const TABLE = {};
@@ -117,7 +105,7 @@ function builder(table) {
   };
   return b;
 }
-['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live', 'games', 'memories'].forEach((t) => { TABLE[t] = () => builder(t); });
+['profiles', 'groups', 'group_members', 'friends', 'reads', 'messages', 'live', 'games'].forEach((t) => { TABLE[t] = () => builder(t); });
 
 let __updates = [];
 let __updateFail = false;      // 置 true 时模拟网关「落盘成功但响应报 404」
@@ -126,6 +114,9 @@ let __puts = [];               // 手动 PUT 兜底的调用记录
 let __weatherOk = true;        // open-meteo 天气源是否可用
 let __searchCalls = [];        // 联网检索源的调用记录
 let __searchOk = true;         // 检索源是否可用（false 时全部拒绝，验证优雅降级）
+let __intentOn = true;         // Jev 意图路由是否可用（服务端是否配了密钥）
+let __intentResp = null;       // 下一次 /api/intent 的返回（null 时用默认闲聊结果）
+let __intentCalls = [];        // /api/intent 请求记录
 // Keyless LLM 网关桩状态：默认给出与云上一致的目录（含 4 个 deepseek 候选）
 let __llmListCalls = 0;
 let __llmListFail = false;
@@ -264,6 +255,15 @@ function makeStub() {
               total_volume: 24279642149, last_updated: new Date().toISOString(),
             }]),
           });
+        }
+        // Jev 意图路由：GET 能力探测 + POST 意图判断（由用例通过 __intent 控制返回）
+        if (url.indexOf('/api/intent') >= 0) {
+          if (method === 'GET') {
+            return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, enabled: __intentOn, min_confidence: 0.6, model: 'jev-latest' }) });
+          }
+          __intentCalls.push(JSON.parse((o && o.body) || '{}'));
+          const r = __intentResp || { ok: true, intent: 'chitchat', confidence: 0.4, intent_confidence: 0.9, kind: 'none', has_asset: 0.05, crypto: '', crypto_confidence: 0 };
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(r) });
         }
         return Promise.reject(new Error('no network in test'));
       };
@@ -685,16 +685,20 @@ function makeStub() {
 
     // 1) 接入方式：Keyless 网关 —— 前端源码里不得出现任何硬编码密钥
     {
-      // ⚠️ 小美的模型调用已搬到 bot.js，必须两个文件一起扫，否则断言形同虚设
-      const src = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')
-        + '\n' + fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
+      const src = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
       log(!/sk-[A-Za-z0-9]{16,}/.test(src), '前端源码无 sk- 硬编码密钥（apikey 由云端网关托管）');
       log(/CLOUD\.llm\.chat\.completions\.create/.test(src), '通过 CLOUD.llm 网关调用（非直连第三方域名）');
       log(!/api\.deepseek\.com/.test(src), '不直连 api.deepseek.com（避免密钥泄露 + CORS）');
       // 云上 DeepSeek 全是 onlyReasoning 推理模型：不能硬传 temperature，超时也要放宽
       log(!/stream:\s*true,\s*temperature:/.test(src), '不硬传 temperature（推理模型采样参数锁定，传了可能被拒）');
       const to = src.match(/var LLM_TIMEOUT = (\d+)/);
-      log(!!to && Number(to[1]) >= 40000, 'LLM_TIMEOUT ≥ 40s（适配推理模型首字延迟）', to ? to[1] + 's' : 'none');
+      // ⚠️ 30s 是有意的：botLLM 现在有「多模型回退链」（llmQueue × 带/不带温度），
+      //    单模型 30s 超时后会自动换下一个重试，总预算仍 < botHoldTyping 的 60s。
+      //    35s 以上反而会让「换模型重试」没机会执行就到 60s 预算上限。
+      log(!!to && Number(to[1]) >= 25000 && Number(to[1]) <= 45000,
+        'LLM_TIMEOUT 在 25~45s 区间（配合多模型回退链）', to ? to[1] + 's' : 'none');
+      // 回退链存在
+      log(/LLM_RETRY/.test(src) && /S\.llmQueue/.test(src), 'botLLM 有候选模型回退链（llmQueue + LLM_RETRY）');
       // 注意：源码里有两处 botTypingUntil（普通回复 1.5s / AI 长等待 60s），
       // 要取「AI 长等待」那个最大值，否则会误配到 1.5s
       const holds = Array.from(src.matchAll(/S\.botTypingUntil = Date\.now\(\) \+ (\d+)/g)).map((m) => Number(m[1]));
@@ -709,7 +713,7 @@ function makeStub() {
     //    但必须精确命中优先级最高的 deepseek-v4.1-flash（不是列表第一个）
     await sleep(300);
     if (LT && LT.ensureLLM) {
-      delete LT.S.llmReady; LT.S.llmModel = null;
+      LT.S.llmTried = false; LT.S.llmModel = null;
       __llmListCalls = 0;
       await LT.ensureLLM();
       log(LT.S.llmModel === 'deepseek-v4.1-flash',
@@ -717,7 +721,7 @@ function makeStub() {
       log(__llmListCalls === 1, '拉取模型目录 1 次', __llmListCalls);
       // 幂等：再调一次不应重复拉目录
       await LT.ensureLLM();
-      log(__llmListCalls === 1, 'ensureLLM 幂等（llmReady 生效，不重复拉目录）', __llmListCalls);
+      log(__llmListCalls === 1, 'ensureLLM 幂等（llmReady 缓存 Promise 生效，不重复拉目录）', __llmListCalls);
     } else {
       log(false, 'window.LT.ensureLLM 已导出', LT ? Object.keys(LT).join(',') : 'no LT');
     }
@@ -727,7 +731,9 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = saved.map((m) => (m.id === 'deepseek-v4.1-flash' ? { id: m.id, name: m.name, disabled: true } : m));
       if (LT && LT.ensureLLM) {
-        delete LT.S.llmReady; LT.S.llmModel = null;
+        // ⚠️ 重置状态必须清「缓存的 Promise」而不是旧的 llmTried 布尔标志
+        //    （ensureLLM 已改为缓存 Promise 修并发竞态；只清 llmTried 会导致复用旧 Promise）
+        LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'deepseek-v4-flash', '首选被 disabled → 跳到次选', String(LT.S.llmModel));
       }
@@ -739,7 +745,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: true }];
       if (LT && LT.ensureLLM) {
-        delete LT.S.llmReady; LT.S.llmModel = null;
+        LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'glm-5.3', '目录无 deepseek → 兜底任意可用模型', String(LT.S.llmModel));
       }
@@ -751,7 +757,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = [];
       if (LT && LT.ensureLLM) {
-        delete LT.S.llmReady; LT.S.llmModel = null;
+        LT.S.llmTried = false; LT.S.llmModel = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === null, '模型目录为空 → llmModel 保持 null（走旧兜底话术）', String(LT.S.llmModel));
       }
@@ -766,7 +772,8 @@ function makeStub() {
     if (hallConv) hallConv.click();
     await sleep(800);
 
-    // 1) 工具栏含「游戏」图标按钮（#bMore 更早消息已按需求移除，见文件末尾工具栏断言）
+    // 1) 工具栏按钮已是「游戏」图标；#bMore（更早消息）由 dev 分支恢复，与 #bGame 共存
+    log(D.querySelector('#bMore') !== null, '「更早消息」按钮保留在工具栏');
     const bGame = D.querySelector('#bGame');
     log(!!bGame, '工具栏游戏图标按钮共存');
 
@@ -1266,16 +1273,12 @@ function makeStub() {
   const tJoke = await botTalk('@小美 讲个笑话');
   log(tJoke.length > 10, '「讲个笑话」有回复', tJoke.slice(0, 30));
   const tMenu = await botTalk('@小美 你能干什么');
-  // 新菜单不再用序号罗列，改为「能力关键词」清单；断言跟着改成语义检查
-  log(tMenu.indexOf('聊天') >= 0 && tMenu.indexOf('笑话') >= 0 && tMenu.indexOf('天气') >= 0 && tMenu.indexOf('记忆') >= 0,
-    '问「你能干什么」输出能力菜单（含聊天/笑话/天气/记忆）', tMenu.slice(0, 40).replace(/\n/g, ' '));
+  log(tMenu.indexOf('笑话') >= 0 && tMenu.indexOf('古诗') >= 0 && tMenu.indexOf('天气') >= 0,
+    '问「你能干什么」输出技能菜单（带 6 个序号技能）', tMenu.slice(0, 40).replace(/\n/g, ' '));
   const tNum = await botTalk('@小美 2');
-  log(tNum.length > 20 && tNum !== '(无回复)', '菜单后直接回复序号 2 -> 触发内容型生成', tNum.slice(0, 30));
+  log(tNum.length > 20 && tNum !== '(无回复)', '菜单后直接回复序号 2 -> 触发讲故事', tNum.slice(0, 30));
   const tPoem = await botTalk('@小美 来首古诗');
-  // ⚠️ 古诗已从「硬编码抽签」改为「模型现场生成」：测试环境无 LLM，
-  //    会走兜底话术，因此不能再断言必须出现书名号 —— 只断言"确实接话了"。
-  log(tPoem !== '(无回复)' && tPoem.length > 4, '「来首古诗」走到内容型生成路径并有回复', tPoem.slice(0, 24));
-  // 真正的路由正确性由模块级断言保证（见下方 INTENTS 表检查）
+  log(tPoem.indexOf('《') >= 0, '「来首古诗」返回古诗（带书名号标题）', tPoem.slice(0, 24));
   const tW = await botTalk('@小美 北京天气', 3200);
   log(tW.indexOf('°C') >= 0 && tW.indexOf('北京') >= 0, '「北京天气」返回 open-meteo 真实天气', tW.slice(0, 40).replace(/\n/g, ' '));
   const tN = await botTalk('@小美 看看新闻', 3600);
@@ -1298,7 +1301,7 @@ function makeStub() {
   cmdInput.value = '#';
   cmdInput.dispatchEvent(new w.Event('input', { bubbles: true }));
   await sleep(140);
-  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 4, '输入 # 弹出 4 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
+  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 5, '输入 # 弹出 5 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
   const btcItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#btc')[0];
   log(!!btcItem, '菜单含 #btc 指令项');
   const cardsBefore = D.querySelectorAll('#mList .cardmsg').length;
@@ -1332,6 +1335,40 @@ function makeStub() {
   const nameCard = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
   log(!!nameCard && nameCard.textContent.indexOf('贵州茅台') >= 0, '名称解析命中 贵州茅台 并展示名称', nameCard ? nameCard.textContent.slice(0, 80) : 'none');
   cmdInput.value = '';;
+
+  // ===== 聊天洞察（Jev 分析当前会话情绪/意图/好感/质量）=====
+  const W = D.defaultView;
+  const anaItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#分析')[0];
+  log(!!anaItem, '菜单含 #分析 指令项');
+  // mock /api/analyze，验证整条链路：输入 #分析 → 发卡片（不依赖内部闭包函数）
+  const realFetchA = W.fetch;
+  W.fetch = (url, opts) => {
+    if (String(url).indexOf('/api/analyze') >= 0) {
+      return Promise.resolve({ json: () => Promise.resolve({
+        ok: true,
+        mood: { choice: 'calm', probabilities: { calm: 0.6 }, confidence: 0.8 },
+        intent: { choice: 'ask', probabilities: { ask: 0.6 }, confidence: 0.7 },
+        affinity: { choice: '3_neutral', probabilities: {}, confidence: 0.6 },
+        quality: { choice: '4_good', probabilities: {}, confidence: 0.5 },
+        next_action: { choice: 'ask', probabilities: {}, confidence: 0.7 },
+        model: 'jev-latest', usage: null,
+      }) });
+    }
+    return realFetchA(url, opts);
+  };
+  // 先发一条普通文本，确保当前会话有可分析的消息
+  const cardsB4A = D.querySelectorAll('#mList .cardmsg').length;
+  cmdInput.value = '在吗';
+  D.querySelector('#bSend').click();
+  await sleep(400);
+  cmdInput.value = '#分析';
+  D.querySelector('#bSend').click();
+  await sleep(600);
+  W.fetch = realFetchA;
+  log(D.querySelectorAll('#mList .cardmsg').length === cardsB4A + 1, '执行 #分析 后新增一张洞察卡片', D.querySelectorAll('#mList .cardmsg').length);
+  const anCardA = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
+  log(!!anCardA && anCardA.textContent.indexOf('聊天洞察') >= 0 && anCardA.textContent.indexOf('好感/投入') >= 0 && anCardA.textContent.indexOf('我方回复') >= 0, '洞察卡片含标题与评分条', anCardA ? anCardA.textContent.replace(/\s+/g, ' ').slice(0, 130) : 'none');
+  cmdInput.value = '';
 
   D.querySelector('#meBox').click();
   await sleep(400);
@@ -1479,9 +1516,7 @@ function makeStub() {
   // ===== 本轮新功能：小美联网检索（手工 RAG）=====
   {
     const LT = w.LT;
-    // ⚠️ 检索链路已整体搬进 bot.js：必须把两个文件拼起来扫，否则断言永远失败
-    const src2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')
-      + '\n' + fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
+    const src2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
 
     // 1) 接入方式：只能是「免 key + 支持 CORS」的公开源（静态托管起不了后端进程）
     log(!/sk-[A-Za-z0-9]{16,}/.test(src2), '检索链路同样无硬编码密钥');
@@ -1540,419 +1575,125 @@ function makeStub() {
     }
 
     // 6) 检索资料真的拼进了 LLM 的 system 提示（手工 RAG 的关键一环）
-    log(/function buildSystem/.test(src2) && /ref/.test(src2),
-      'system 提示组装函数 buildSystem 接受检索资料（ref）');
+    log(/botLLM\(text, who, conv, ref\)/.test(src2) || /botLLM\([^)]*ref\)/.test(src2),
+      'botLLM 接受第 4 个参数 ref（检索资料）');
     log(/联网检索到的资料/.test(src2), 'system 提示里明确要求「优先依据资料回答、查不到就说查不到」');
-    log(/searchWeb\(sanitizeQuery\(plan\.text\)\)/.test(src2),
-      'runGen 会先 searchWeb（带检索词清洗）再把资料喂给模型');
-    log(/s\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
+    log(/await searchWeb\(/.test(src2), 'botReply 的闲聊分支会先 searchWeb 再喂模型');
+    log(/S\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
   }
 
-  // ===== 本轮重构：小美模块化（bot.js）+ 人格 / 情绪 / 意图注册表 / 记忆 =====
-  {
-    const LT = w.LT, B = w.LT_BOT;
-    const botSrc = fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
-    const htmlSrc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  // ===== Jev 意图路由（TypeSafe System One）=====
+  if (w.LT && w.LT.stockGuess) {
+    await sleep(350);   // 等启动时的能力探测完成
+    log(w.LT.INTENT.enabled === true, '启动后探测到 /api/intent 可用，Jev 路由开启');
 
-    // 1) 模块化：独立文件 + 版本号（缓存一致性）
-    log(/<script\s+src="bot\.js\?v=\d+"><\/script>/.test(htmlSrc),
-      'index.html 以带版本号的独立文件引入 bot.js（避免 CDN/浏览器吃旧缓存）');
-    log(!!B, 'bot.js 挂到 window.LT_BOT');
-    log(/(?:window|root)\.LT_BOT\s*=/.test(botSrc), 'bot.js 自注册到全局 LT_BOT');
-    // 旧的大坨代码确实搬走了（防止"复制一份忘删旧的"导致两套逻辑打架）
-    log(!/var JOKES\s*=/.test(htmlSrc) && !/var STORIES\s*=/.test(htmlSrc) && !/var POEMS\s*=/.test(htmlSrc),
-      'index.html 里的硬编码 JOKES/STORIES/POEMS 已删除（内容型改现场生成）');
-    log(!/var BOT_KEY\s*=/.test(htmlSrc) && !/var BOT_MENU\s*=/.test(htmlSrc),
-      'index.html 里的 BOT_KEY/BOT_MENU 已删除（搬入模块的意图表）');
+    log(w.LT.stockGuess('茅台现在多少钱了') === '茅台', 'stockGuess 从中文句子中剥离语气词/意图词', w.LT.stockGuess('茅台现在多少钱了'));
+    log(w.LT.stockGuess('@小美 帮我查下 600519 的股价') === '600519', 'stockGuess 保留代码/英文标的', w.LT.stockGuess('@小美 帮我查下 600519 的股价'));
 
-    // 2) 人格档案：必须有角色/语气/边界，且不再是"活泼的小助手"一句话
-    const P = B && B.PERSONA;
-    log(!!P && Array.isArray(P.core) && P.core.length >= 5, 'PERSONA.core 人格条目 ≥5 条', P ? P.core.length : 'none');
-    log(!!P && Array.isArray(P.rules) && P.rules.some((r) => /思考过程|人格设定/.test(r)),
-      'PERSONA.rules 明确禁止输出思考过程 / 泄露人格设定');
+    // 加密货币意图 → 自动出行情卡片（不需要用户输入 #btc）
+    __intentResp = { ok: true, intent: 'crypto_quote', confidence: 0.91, intent_confidence: 0.94, kind: 'crypto', kind_confidence: 0.92, has_asset: 0.97, crypto: 'bitcoin', crypto_confidence: 0.95 };
+    const cardsA = D.querySelectorAll('#mList .cardmsg').length;
+    const hitCrypto = await w.LT.tryIntentAutoReply('比特币现在多少钱', 'c1');
+    await sleep(200);
+    log(hitCrypto === true, '「比特币现在多少钱」被识别为行情意图并消费（不再走闲聊）', String(hitCrypto));
+    log(D.querySelectorAll('#mList .cardmsg').length === cardsA + 1, '意图命中后自动贴出行情卡片');
+    const autoCard = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
+    log(!!autoCard && autoCard.textContent.indexOf('Bitcoin') >= 0, '自动卡片内容正确（Bitcoin 行情）', autoCard ? autoCard.textContent.replace(/\s+/g, ' ').slice(0, 90) : 'none');
+    log(__intentCalls.length >= 1 && typeof __intentCalls[__intentCalls.length - 1].text === 'string', '调用 /api/intent 时把原文交给服务端判断', JSON.stringify(__intentCalls[__intentCalls.length - 1]).slice(0, 120));
 
-    // 3) 情绪系统：5 种状态 + 时段基线 + 触发规则
-    const M = B && B.MOODS;
-    log(!!M && Object.keys(M).length === 5, 'MOODS 恰好 5 种情绪', M ? Object.keys(M).join(',') : 'none');
-    const moodOk = M && ['happy', 'curious', 'focus', 'sleepy', 'gentle'].every((k) => M[k] && M[k].hint && M[k].emoji);
-    log(!!moodOk, '5 种情绪都带 emoji 与语气 hint（真正驱动 prompt）');
-    if (B && B.moodByHour) {
-      log(B.moodByHour(3) === 'sleepy', '凌晨 3 点 → 基线情绪=困倦');
-      log(B.moodByHour(10) === 'happy', '上午 10 点 → 基线情绪=开心');
-      log(B.moodByHour(20) === 'curious', '晚上 8 点 → 基线情绪=好奇');
-      log(B.moodByHour(7) === 'gentle', '清晨 7 点 → 基线情绪=温柔');
-    } else log(false, 'moodByHour 已导出');
+    // 股票意图 → 走 smartbox 名称解析后出卡片
+    __intentResp = { ok: true, intent: 'stock_quote', confidence: 0.88, intent_confidence: 0.9, kind: 'stock', kind_confidence: 0.89, has_asset: 0.93, crypto: '', crypto_confidence: 0 };
+    const cardsB = D.querySelectorAll('#mList .cardmsg').length;
+    const hitStock = await w.LT.tryIntentAutoReply('茅台现在多少钱', 'c1');
+    await sleep(300);
+    log(hitStock === true && D.querySelectorAll('#mList .cardmsg').length === cardsB + 1, '「茅台现在多少钱」自动解析标的并出卡片', 'hit=' + hitStock);
 
-    // 4) 情绪会被输入改变
-    if (B && B.moodTouch) {
-      B.moodTouch('我今天好难过啊');
-      log(B.moodNow().key === 'gentle', '负面情绪输入 → 切换成「温柔」', B.moodNow().key);
-      B.moodTouch('这个 bug 怎么修');
-      log(B.moodNow().key === 'focus', '提问类输入 → 切换成「专注」', B.moodNow().key);
-      B.moodTouch('哈哈哈哈你太厉害了');
-      log(B.moodNow().key === 'happy', '夸赞/开心输入 → 切换成「开心」', B.moodNow().key);
-    } else log(false, 'moodTouch 已导出');
+    // 闲聊 → 不消费，交回原有链路
+    __intentResp = { ok: true, intent: 'chitchat', confidence: 0.95, intent_confidence: 0.95, kind: 'none', kind_confidence: 0.9, has_asset: 0.02, crypto: '', crypto_confidence: 0 };
+    log((await w.LT.tryIntentAutoReply('今天心情不错呀', 'c1')) === false, '闲聊不被误判成功能（交回 DeepSeek 闲聊链路）');
 
-    // 5) 意图注册表：表驱动、有 kind 分类、覆盖关键意图
-    const I = B && B.INTENTS;
-    log(!!I && Array.isArray(I) && I.length >= 10, 'INTENTS 意图表 ≥10 条', I ? I.length : 'none');
-    log(!!I && I.every((x) => x.id && x.kind && x.k), '每条意图都有 id / kind / 匹配规则');
-    log(!!I && I.every((x) => ['data', 'gen', 'say'].includes(x.kind)), '意图 kind 取值合法（data/gen/say）');
-    const byId = {};
-    (I || []).forEach((x) => { byId[x.id] = x; });
-    log(!!byId['joke'] && byId['joke'].kind === 'gen', '笑话 = 内容型（gen），交给模型现场生成');
-    log(!!byId['story'] && byId['story'].kind === 'gen', '故事 = 内容型（gen）');
-    log(!!byId['poem'] && byId['poem'].kind === 'gen', '诗词 = 内容型（gen）');
-    log(!!byId['weather'] && byId['weather'].kind === 'data', '天气 = 事实型（data），走真实数据源');
-    log(!!byId['news'] && byId['news'].kind === 'data', '新闻 = 事实型（data）');
-    log(!!byId['chat'] && byId['chat'].kind === 'gen', '兜底 chat = 内容型（gen），不再抽签');
-    log(!!byId['mem-save'] && !!byId['mem-ask'] && !!byId['mem-forget'], '记忆三条意图齐备（记住/回忆/忘掉）');
+    // 低置信度 → 不触发（宁可不做，也不能乱贴卡片）
+    __intentResp = { ok: true, intent: 'crypto_quote', confidence: 0.42, intent_confidence: 0.5, kind: 'crypto', kind_confidence: 0.45, has_asset: 0.5, crypto: 'bitcoin', crypto_confidence: 0.42 };
+    log((await w.LT.tryIntentAutoReply('那个东西怎么样了', 'c1')) === false, '置信度不足（<0.6）时不触发任何功能');
 
-    // 6) 路由正确性（模块级，不经 UI）
-    if (B && B.matchIntent) {
-      const mi = (t) => (B.matchIntent(t) || {}).id;
-      log(mi('讲个笑话') === 'joke', '「讲个笑话」→ joke 意图');
-      log(mi('给我讲个睡前故事') === 'story', '「讲个睡前故事」→ story 意图');
-      log(mi('念首诗') === 'poem', '「念首诗」→ poem 意图');
-      log(mi('北京天气') === 'weather', '「北京天气」→ weather 意图');
-      log(mi('看看新闻') === 'news', '「看看新闻」→ news 意图');
-      log(mi('记住：我喜欢喝美式') === 'mem-save', '「记住：xxx」→ mem-save 意图');
-      log(mi('你还记得我喜欢喝什么吗') === 'mem-ask', '「你还记得…」→ mem-ask 意图');
-      log(mi('忘掉美式') === 'mem-forget', '「忘掉 xxx」→ mem-forget 意图');
-      log(mi('你今天心情怎么样') === 'mood', '「你心情怎么样」→ mood 意图');
-      log(mi('随便聊聊吧今天真不错') === 'chat', '普通闲聊 → 落到 chat 兜底（不抽签）');
-    } else log(false, 'matchIntent 已导出');
+    // 服务端不可用 → 静默降级
+    __intentResp = { ok: false, reason: 'no_key' };
+    log((await w.LT.tryIntentAutoReply('比特币多少了', 'c1')) === false, '服务端返回 ok:false 时静默降级（不影响聊天）');
 
-    // 7) 内容型意图必须带「生成提示」，否则模型还是不知道要写什么
-    log(!!byId['joke'] && /笑话/.test(byId['joke'].hint || ''), 'joke 意图带生成提示（style hint）');
-    log(byId['joke'] && byId['joke'].temp != null, 'joke 意图带较高温度（内容型需要发散）');
-
-    // 8) botAnswer 契约：三种返回形态都要能被上层正确处理
-    log(typeof LT.botAnswer === 'function', 'window.LT.botAnswer 已导出（转发到模块）');
-    const aMenu = LT.botAnswer('你能干什么', 'u_test', 'g:hall');
-    // ⚠️ 菜单返回的是「模板文案」。botAnswer 已把 {n} 替换掉，但 {t}（当前时间）留给上层 botReply 填，
-    //    所以这里断言「是字符串 + 含能力项 + 已替换 {n}」，不能断言不含 {t}。
-    log(typeof aMenu === 'string' && aMenu.indexOf('聊天') >= 0 && aMenu.indexOf('{n}') < 0,
-      '菜单意图 → 同步字符串且 {n} 已替换', typeof aMenu);
-    const aGen = LT.botAnswer('讲个笑话', 'u_test', 'g:hall');
-    log(!!aGen && aGen.__gen === true, '内容型意图 → 返回 {__gen:true} 计划对象（交给异步分支）', typeof aGen);
-    const aWeather = LT.botAnswer('北京天气', 'u_test', 'g:hall');
-    log(!!aWeather && typeof aWeather.then === 'function', '事实型意图 → 返回 Promise');
-    const aNone = LT.botAnswer('', 'u_test', 'g:hall');
-    log(aNone === null || (aNone && aNone.__gen === true), '空输入不崩（返回 null 或生成计划）');
-
-    // 9) 短期上下文：带发言人标注，且不再是 6 条
-    if (B && B.recentContext) {
-      const ctx = B.recentContext('g:hall', 'u_test');
-      log(Array.isArray(ctx) && ctx.every((x) => x.role === 'user' || x.role === 'assistant'),
-        'recentContext 返回合法 role 序列', Array.isArray(ctx) ? ctx.length : 'none');
-      log(/CTX_N\s*=\s*20/.test(botSrc), '短期上下文窗口扩大到 20 条（原来是 6 条）');
-      log(/【' \+ nm \+ '】/.test(botSrc), '群聊历史里给发言人打了标注（模型才不会把别人的话当成自己的）');
-    } else log(false, 'recentContext 已导出');
-
-    // 10) 记忆系统：本地缓存 + 云端表 + 去重
-    if (B && B.memAdd && B.memStore) {
-      const before = B.memStore().length;
-      B.memAdd('测试用：用户喜欢喝美式', 'u_test', 'g:hall');
-      log(B.memStore().length === before + 1, 'memAdd 写入一条长期记忆', B.memStore().length);
-      B.memAdd('测试用：用户喜欢喝美式', 'u_test', 'g:hall');
-      log(B.memStore().length === before + 1, '重复内容不会重复记（去重生效）');
-      const rec = B.memRecall('我平时喜欢喝什么', 'u_test');
-      log(Array.isArray(rec) && rec.length >= 1, 'memRecall 能按关键词召回相关记忆', rec.length);
-      log(/db\.from\('memories'\)/.test(botSrc), '长期记忆落到云端 memories 表（跨设备同步）');
-      log(/LT_BOT\.memStore|botMem/.test(botSrc), '本地有记忆缓存（弱网也能用）');
-    } else log(false, 'memAdd/memStore 已导出');
-
-    // 11) system prompt 里人格 + 情绪 + 记忆三者都要出现
-    if (B && B.buildSystem) {
-      const sys = B.buildSystem({ who: '小明', hint: '用户想听笑话', mem: [{ content: '他喜欢喝美式' }] });
-      log(/小美/.test(sys) && /情绪/.test(sys), 'system 含人格 + 情绪');
-      log(/小明/.test(sys), 'system 带上对话对象名字');
-      log(/他喜欢喝美式/.test(sys), 'system 注入长期记忆');
-      log(/用户想听笑话/.test(sys), 'system 注入本次任务提示');
-      log(/思考过程/.test(sys), 'system 明确禁止输出思考链（纯推理模型会吐 reasoning_content）');
-    } else log(false, 'buildSystem 已导出');
-
-    // 12) 流式上屏：临时气泡不进库
-    log(/S\.botStream/.test(htmlSrc), 'index.html 有流式临时消息状态 S.botStream');
-    log(/function renderStream/.test(htmlSrc), '提供 renderStream 局部渲染流式气泡');
-    log(/botStreamEnd/.test(htmlSrc), '收到完整回复后清理流式气泡');
-    log(/S\.botStream = null/.test(htmlSrc), '切换会话时丢弃流式气泡（否则会串到别的对话）');
-    log(/CTX_N|onDelta/.test(botSrc) && /onDelta\(content\)/.test(botSrc), 'callLLM 支持流式回调 onDelta');
-    log(!/reasoning_content/.test(botSrc) || /只收正文/.test(botSrc),
-      '明确只收 delta.content，不把 reasoning_content 发进聊天室');
+    // 源码断言：闲聊分支确实先走意图路由
+    const src3 = html;
+    log(/await tryIntentAutoReply\(text, conv\)/.test(src3), 'botReply 闲聊分支前置调用 tryIntentAutoReply');
   }
 
-  // ===== 本轮：工具栏精简（去掉 bAt / bMore）=====
-  log(D.querySelector('#bAt') === null, '工具栏「@某人」按钮已移除');
-  log(D.querySelector('#bMore') === null, '工具栏「更早消息」按钮已移除');
-  log(!!D.querySelector('#bGame') && !!D.querySelector('#bCmd') && !!D.querySelector('#bEmo') && !!D.querySelector('#bImg') && !!D.querySelector('#bFile'),
-    '其余工具栏按钮仍在（游戏 / # / 表情 / 图片 / 文件）');
-
-  // ===== 本轮：输入 @ 弹群成员列表，Enter = 确认艾特（不是发送）=====
+  // ===== 小美回归修复（在 dev 单文件版上重新移植）：地名解析 / 并发竞态 / 联网问答 / 新闻兜底 / 去重 =====
   {
-    const hallConv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];
-    if (hallConv) hallConv.click();
-    await sleep(700);
-    const inp = D.querySelector('#input');
-    const mpop = D.querySelector('#mpop');
-    const msgCountBefore = D.querySelectorAll('#mList .m').length;
+    const LT = w.LT;
+    const srcAll = html;   // 单文件版：index.html 即全部源码
+    // ⚠️ 扫源码前只剥「行首 // 注释」：注释里可能写着被禁用的旧标识，会反噬断言（踩过）
+    // ⚠️⚠️ 两条禁令，都是踩出来的：
+    //   1) 别用 /\/\/[^\n]*/g —— 会把字符串 'https://...' 里的 // 到行尾整段删掉，含 URL 的断言全假失败
+    //   2) 别剥块注释 /\/\*[\s\S]*?\*\//g —— HTML 里 /* 与 */ 数量不配对（正则字面量/字符串里有 */），
+    //      非贪婪跨段匹配会一次吞掉 7 万+ 字符，扫源码断言集体失灵
+    const code = srcAll.split('\n').map(function (l) { return l.replace(/^\s*\/\/.*$/, ''); }).join('\n');
 
-    // 清空后输入 @ → 弹出成员列表
-    inp.value = '@';
-    inp.selectionStart = inp.selectionEnd = 1;
-    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
-    await sleep(120);
-    log(!mpop.classList.contains('hidden'), '输入 @ 弹出成员列表');
-    const items = mpop.querySelectorAll('.mitem');
-    log(items.length >= 2, '@ 列表里列出了群成员', items.length + ' 人');
-    log(Array.prototype.some.call(items, (it) => /我$/.test(it.textContent.trim()) || it.textContent.indexOf('我') >= 0),
-      '列表里能认出自己（带「我」标记）');
+    // 1) 天气地名解析：时间词/动词/语气词双向剥离（真因：原正则把「明天上海」整段当地名）
+    if (LT && LT.parseCity) {
+      [['明天上海天气', '上海'], ['今天北京天气', '北京'], ['上海天气', '上海'],
+       ['帮我查一下 深圳 天气', '深圳'], ['广州今天多少度', '广州'], ['明天上海会不会下雨', '上海']]
+        .forEach(function (c) {
+          const hit = LT.parseCity(c[0]);
+          log(hit === c[1], '天气解析「' + c[0] + '」→ ' + c[1], '实际=' + hit);
+        });
+    } else log(false, 'window.LT.parseCity 已导出');
 
-    // ↑↓ 能切换高亮
-    const firstOn = mpop.querySelectorAll('.mitem.on')[0];
-    inp.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
-    await sleep(60);
-    const secondOn = mpop.querySelectorAll('.mitem.on')[0];
-    log(!!firstOn && !!secondOn && firstOn !== secondOn, '↓ 键切换成员高亮');
-    log(mpop.querySelectorAll('.mitem.on').length === 1, '任意时刻只有一个成员处于预选高亮');
-
-    // 弹层靠左对齐输入框（不居中）
-    {
-      const pr = D.querySelector('#pPill').getBoundingClientRect();
-      const mr = mpop.getBoundingClientRect();
-      log(Math.abs(mr.left - pr.left) <= 3, '@ 成员列表左边缘对齐输入框（靠左显示）',
-        'popLeft=' + Math.round(mr.left) + ' pillLeft=' + Math.round(pr.left));
+    // 2) ⚠️⚠️ 真凶回归：ensureLLM 缓存 Promise 而非布尔标志（修并发竞态）
+    log(!/S\.llmTried/.test(code) && /if \(S\.llmReady\) \{ await S\.llmReady; return; \}/.test(code),
+      'ensureLLM 缓存 Promise 而非布尔值（修并发竞态：曾致 1 秒秒回「卡了一下」+ 天气回两次）',
+      /S\.llmTried/.test(code) ? '代码里还有 llmTried' : 'ok');
+    if (LT && LT.ensureLLM) {
+      const savedR = LT.S.llmReady, savedM = LT.S.llmModel, savedQ = LT.S.llmQueue;
+      LT.S.llmReady = null; LT.S.llmModel = null; LT.S.llmQueue = null;
+      const callsBefore = __llmListCalls;
+      const p1 = LT.ensureLLM(), p2 = LT.ensureLLM();
+      await Promise.all([p1, p2]);
+      log(LT.S.llmModel === 'deepseek-v4.1-flash',
+        '并发两次 ensureLLM：await 后模型已就绪（不会秒回兜底）', String(LT.S.llmModel));
+      log(__llmListCalls - callsBefore <= 1, '并发调用不重复拉模型目录',
+        'delta=' + (__llmListCalls - callsBefore));
+      log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue.length >= 2,
+        '候选模型队列含多个（保证有回退目标）', Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.length : 0);
+      LT.S.llmReady = savedR; LT.S.llmModel = savedM; LT.S.llmQueue = savedQ;
     }
 
-    // Enter = 确认艾特（关键：绝不能发送消息）
-    const targetName = secondOn.querySelector('span').textContent.trim();
-    inp.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await sleep(160);
-    log(inp.value === '@' + targetName + ' ', 'Enter 把选中成员写进输入框（@昵称+空格）', JSON.stringify(inp.value));
-    log(mpop.classList.contains('hidden'), '确认后成员列表自动收起');
-    log(D.querySelectorAll('#mList .m').length === msgCountBefore, 'Enter 确认艾特时没有发送消息（消息数不变）');
+    // 3) 天气主流程已改用 parseCity（不再用内联正则）
+    log(/var city = parseCity\(text\)/.test(code), 'botWeather 改用 parseCity 解析地名');
 
-    // 补几个字再发送 → 正常发出且带 mentions
-    inp.value = '@' + targetName + ' 你好呀';
-    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
-    await sleep(60);
-    log(D.querySelector('#mpop').classList.contains('hidden'), '昵称后已有空格，不再重复弹成员列表');
-    D.querySelector('#bSend').click();
-    await sleep(400);
-    const atMsgs = DATA.messages.filter((m) => m.conv === 'g:hall' && /你好呀$/.test(m.text || '') && (m.mentions || []).length);
-    log(atMsgs.length >= 1, '发送后 @提及被解析成 mentions 落库', atMsgs.length ? JSON.stringify(atMsgs[atMsgs.length - 1].mentions) : 'none');
+    // 4) 新闻源换血 + 联网兜底（原三源实测 curl 000 全挂）
+    log(/60s-api\.viki\.moe/.test(code), 'NEWS_SOURCES 首位换成 viki.moe（原三源已失效）');
+    log(/function botNewsFallback/.test(code), '新闻/热点失败时走联网检索+模型总结兜底');
+    log(!/新闻源今天集体打不通了/.test(code), '已删除「新闻源今天集体打不通了」的硬报错文案');
 
-    // 私聊里输入 @ 不应弹成员列表
-    const priv = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'p:u_a~u_test')[0];
-    if (priv) {
-      priv.click();
-      await sleep(500);
-      const inp2 = D.querySelector('#input');
-      D.querySelector('#mpop').classList.add('hidden');
-      inp2.value = '@';
-      inp2.selectionStart = inp2.selectionEnd = 1;
-      inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
-      await sleep(120);
-      log(D.querySelector('#mpop').classList.contains('hidden'), '私聊里输入 @ 不弹成员列表');
-      inp2.value = ''; inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
-    }
-  }
+    // 5) lookup 强制联网 + sanitizeQuery 清洗检索词
+    log(/var LOOKUP_RE = /.test(code), '新增 LOOKUP_RE（教程/怎么用/文档/命令/解释/总结类表达）');
+    log(/LOOKUP_RE\.test\(t\)\) \{ S\.lookupAt = /.test(code), 'botAnswer 命中 LOOKUP_RE 时标记强制联网（排在 return null 之前）');
+    log(/var lookupForced = false/.test(code) && /lookupForced \|\| botSearchNeed\(text\)/.test(code),
+      'botReply 读到 lookup 标记后强制检索（不依赖 searchNeed 启发式）');
+    if (LT && LT.sanitizeQuery) {
+      log(LT.sanitizeQuery('@小美 查一下 HTTP 状态码') === 'HTTP 状态码',
+        'sanitizeQuery 剥掉指令词，只留检索关键词', LT.sanitizeQuery('@小美 查一下 HTTP 状态码'));
+      log(LT.sanitizeQuery('麻烦你帮我查一下 tar 怎么用') === 'tar 怎么用',
+        'sanitizeQuery 支持叠加前缀（麻烦你+帮我+查一下）', LT.sanitizeQuery('麻烦你帮我查一下 tar 怎么用'));
+      log(/searchWeb\(sanitizeQuery\(text\) \|\| text\)/.test(code), 'botReply 用 sanitizeQuery 清洗后再检索');
+    } else log(false, 'window.LT.sanitizeQuery 已导出');
 
-  // ===== 本轮：对局浮层左右分栏（信息在左、棋盘在右）=====
-  {
-    const body = D.querySelector('#groom .gr-body');
-    if (body) {
-      log(!!D.querySelector('#groom .gr-side'), '对局浮层含左侧信息栏 .gr-side');
-      log(!!D.querySelector('#groom .gr-main'), '对局浮层含右侧棋盘区 .gr-main');
-      const hint = D.querySelector('#groom #grHint');
-      if (hint) log(hint.classList.contains('gr-status'), '轮次/提示文案放在左侧 .gr-status 里');
+    // 6) 回复去重：同一条消息只回一次（治「天气回两次」的另一半）
+    log(/var BOT_REPLIED = \{\}/.test(code) && /function botDedupe/.test(code),
+      'maybeBotReply 增加按消息 id 去重（BOT_REPLIED + botDedupe）');
+    log(/if \(!botDedupe\(m\.conv, m\.id\)\) return;/.test(code), 'maybeBotReply 在调用 botReply 前做去重守卫');
 
-      // 棋盘等比自适应：jsdom 不做布局（clientHeight 恒为 0），无法断言真实像素，
-      // 这里只验证「宽度确实参与 --bh 约束」这一 CSS 契约 + fitBoard 在无布局时不误写坏值。
-      const main = D.querySelector('#groom .gr-main');
-      const cvb = D.querySelector('#gboard, #gBoard');
-      log(!!cvb && typeof w.LT.fitBoard === 'function', '导出 fitBoard 供棋盘自适应调用');
-      log(!!cvb && /--bh/.test(cvb.getAttribute('style') || '') === false,
-        '棋盘自身不写死尺寸（由 CSS width:min() 控制）');
-      log(!!main && main.style.getPropertyValue('--bh') === '',
-        'jsdom 无布局时不再写入 --bh（不会残留坏值）', main ? JSON.stringify(main.style.getPropertyValue('--bh')) : 'no main');
-
-      // 选中玩家条不能有背景填充（border + inset 描边会在圆角内侧叠出深色块，用户反馈多次）
-      const cssTxt = Array.prototype.map.call(D.querySelectorAll('style'), (s) => s.textContent).join('\n');
-      const onRule = (cssTxt.match(/\.groom \.gr-pl\.on\{[^}]*\}/) || [''])[0];
-      log(!!onRule && !/background|color-mix/.test(onRule),
-        '选中玩家条只改边框/文字色，无背景填充', onRule || '(未找到规则)');
-      log(!!onRule && !/box-shadow/.test(onRule),
-        '选中玩家条不再叠第二层描边（避免圆角内侧深色块）', onRule ? 'ok' : '(未找到规则)');
-
-      // 指示点动画不能用带 box-shadow 扩散的 livepulse（红色光环会被 overflow 裁成脏弧线）
-      const dotRule = (cssTxt.match(/\.groom \.gr-pl\.on \.dot\{[^}]*\}/) || [''])[0];
-      log(!/livepulse/.test(dotRule), '玩家条指示点不再复用直播红点动画 livepulse', dotRule || '(未找到规则)');
-      log(/grpulse/.test(dotRule), '玩家条指示点改用纯透明度呼吸动画 grpulse', dotRule || '(未找到规则)');
-      const grpulseDef = (cssTxt.match(/@keyframes grpulse\{[^@]*\}/) || [''])[0];
-      log(!!grpulseDef && !/box-shadow/.test(grpulseDef),
-        'grpulse 不含 box-shadow 扩散（从根上消除溢出被裁）', grpulseDef || '(未找到定义)');
-
-      // ⚠️ 类名冲突护栏（排查了三轮才定位到的真凶）：
-      // 玩家条右侧的「我/等待」标签原先用 class="side"，撞上全局 .side
-      // （主界面左侧会话列表：width:290px + background:var(--bg2) + border-right），
-      // 结果每条玩家条右侧被塞进一个 290px 宽带底色的「假侧栏」，被 overflow 裁成横贯灰带。
-      // 断言 1：对局浮层里不允许再出现裸 class="side"（必须是 .plt）
-      const roomHtml = w.LT.renderRoom ? String(w.LT.renderRoom()) : '';
-      log(!/class="side"/.test(roomHtml),
-        '对局浮层内不再使用裸 class="side"（与全局左侧栏规则撞名）',
-        (roomHtml.match(/class="side"/g) || []).length + ' 处');
-      log(/class="plt"/.test(roomHtml) || !/gr-pl/.test(roomHtml),
-        '玩家条标签使用独立类名 .plt', roomHtml ? 'ok' : '(空渲染，跳过)');
-      // 断言 2：.plt 的 CSS 里绝不能出现背景填充 / 固定宽度（那正是 .side 的特征）
-      const pltRule = (cssTxt.match(/\.groom \.gr-pl \.plt\{[^}]*\}/) || [''])[0];
-      log(!!pltRule && !/background|width\s*:/.test(pltRule),
-        '.plt 规则无底色、无固定宽度（区别于全局 .side）', pltRule || '(未找到规则)');
-      // 断言 3：玩家条与状态条宽度必须贴合内容，不能靠 align-self（列向 flex 下不可靠）
-      const plRule = (cssTxt.match(/\.groom \.gr-pl\{[^}]*\}/) || [''])[0];
-      log(/fit-content/.test(plRule),
-        '玩家条用 width:fit-content 收缩到内容宽（align-self 在列向 flex 下不可靠）', plRule || '(未找到规则)');
-      const stRule = (cssTxt.match(/\.groom \.gr-status\{[^}]*\}/) || [''])[0];
-      log(/fit-content/.test(stRule), '状态条同样用 width:fit-content 贴合内容', stRule || '(未找到规则)');
-
-      // ⚠️ 头像必须绝对定位铺满（实测 .av.m 38px 容器里 img 只有 28px 高，上下露灰底）。
-      // .av 是 flex 容器，img 作为 flex item 时 height:100% 会被解析成图片自然高。
-      // 修法：.av 加 position:relative，img 绝对定位 inset:0 脱离 flex 流。
-      const avRule = (cssTxt.match(/\.av\{[^}]*\}/) || [''])[0];
-      log(/position:relative/.test(avRule) && /overflow:hidden/.test(avRule),
-        '.av 建立定位上下文并裁剪（供绝对定位的图片铺满）', avRule || '(未找到规则)');
-      const avImgRule = (cssTxt.match(/\.av > img\{[^}]*\}/) || [''])[0];
-      log(/position:absolute/.test(avImgRule) && /inset:0/.test(avImgRule),
-        '头像图片绝对定位铺满（不靠 height:100%，避免 flex 下解析成自然高）', avImgRule || '(未找到规则)');
-      log(/object-fit:cover/.test(avImgRule),
-        '头像图片等比裁切铺满（不变形、不留白）', avImgRule || '(未找到规则)');
-      // 行内样式不能再写 width/height:100% —— 会覆盖上面的 CSS 导致回归
-      const avFn = String(w.LT.avOf ? w.LT.avOf('测试', 'data:image/png;base64,AA', '#888', 'm') : '');
-      log(!/width:100%;height:100%/.test(avFn),
-        'avOf 不再给 img 写行内 width/height（避免盖掉铺满 CSS）', avFn || '(未导出 avOf，跳过)');
-    }
-  }
-
-  // ===== 小美回归修复（2026-09-22 第二轮）：地名解析 / 重复回复 / 联网问答 / 模型回退 =====
-  {
-    const B = w.LT_BOT || (w.LT && w.LT.BOT);
-    const LT = w.LT;   // ⚠️ 本块局部变量：其他块各自声明了 const LT = w.LT，全局没有 LT
-    // ⚠️ 本块必须自建合并源码变量：上面 1483 行的 srcAll2 是那个块的局部变量，作用域不到这里
-    const srcAll2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')
-      + '\n' + fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
-    if (B) {
-      // 1) 天气地名解析：时间词/动词前缀必须剥掉，否则「明天上海」会整段当地名去 geocode
-      //    真因：原正则 /([\u4e00-\u9fa5]{2,8}?)(?:的)?(?:天气|...)/ 会把「明天上海」整个吃掉
-      const cases = [
-        ['明天上海天气', '上海'], ['今天北京天气', '北京'], ['上海天气', '上海'],
-        ['帮我查一下 深圳 天气', '深圳'], ['广州今天多少度', '广州'], ['明天上海会不会下雨', '上海'],
-      ];
-      cases.forEach(([q, want]) => {
-        const hit = B.parseCity ? B.parseCity(q) : '(未导出 parseCity)';
-        log(hit === want, `天气解析「${q}」→ ${want}`, '实际=' + hit);
-      });
-      log(/CITY_PRE/.test(botSrc) && /CITY_POST/.test(botSrc) && /function parseCity/.test(botSrc),
-        '天气解析内置时间词双向剥离（CITY_PRE + CITY_POST + parseCity）');
-
-      // 2) 重复回复：同一条消息必须只回一次（曾一条消息回两次天气，相隔 29 秒）
-      //    真因：sendMsg 本地调一次 + tick 轮询拉回同一条又调一次
-      log(/BOT_REPLIED/.test(srcAll2) && /function botDedupe/.test(srcAll2),
-        'maybeBotReply 增加按消息 id 去重（BOT_REPLIED + botDedupe）');
-      log(/if \(!botDedupe\(m\.conv, m\.id\)\) return;/.test(srcAll2),
-        'maybeBotReply 在调用 botReply 前做去重守卫');
-
-      // 3) 联网问答意图：必须排在 chat 兜底之前，否则「查一下/教程/怎么用」全被闲聊吞掉
-      const ids = (B.INTENTS || []).map((x) => x.id);
-      log(ids.indexOf('lookup') >= 0, '新增 lookup 意图（联网问答/教程/文档）', ids.join(','));
-      log(ids.indexOf('lookup') < ids.indexOf('chat'),
-        'lookup 意图排在 chat 兜底之前（否则永远命中不到）');
-      const lk = (B.INTENTS || []).filter((x) => x.id === 'lookup')[0];
-      log(!!lk && ['fetch 教程', 'linux 查找文件', '怎么用 tar', '解释一下什么是协程', '总结一下这篇文章', '什么是协程']
-        .every((s) => lk.k.test(s)),
-        'lookup 能命中教程/命令/解释/总结类表达',
-        lk ? ['fetch 教程', 'linux 查找文件', '怎么用 tar'].filter((s) => !lk.k.test(s)).join(',') || 'ok' : 'no-lookup');
-
-      // 4) 强制联网：lookup 意图不再交给 searchNeed 猜
-      log(/plan\.id === 'lookup'/.test(botSrc) && /var forced = /.test(botSrc),
-        'runGen 对 lookup 意图强制联网（不依赖 searchNeed 猜）');
-      log(/plan\.id/.test(botSrc) && /return \{ __gen: true, id: it\.id/.test(botSrc),
-        'botAnswer 把意图 id 带进 __gen 计划对象');
-
-      // 5) 检索词清洗：不能把「@小美 查一下」整句丢给维基
-      //    ⚠️ 踩过：`@小美` 换成空格后字符串带**前导空格**，`^` 锚定会失配 → 指令词剥不掉。
-      //       必须先归并空白再剥，且前缀可叠用（「麻烦你帮我查一下 X」）
-      if (B.sanitizeQuery) {
-        log(B.sanitizeQuery('@小美 查一下 HTTP 状态码') === 'HTTP 状态码',
-          'sanitizeQuery 剥掉指令词，只留检索关键词', B.sanitizeQuery('@小美 查一下 HTTP 状态码'));
-        log(B.sanitizeQuery('麻烦你帮我查一下 tar 怎么用') === 'tar 怎么用',
-          'sanitizeQuery 支持叠加前缀（麻烦你+帮我+查一下）', B.sanitizeQuery('麻烦你帮我查一下 tar 怎么用'));
-        log(B.sanitizeQuery('帮我搜一下 js 闭包') === 'js 闭包',
-          'sanitizeQuery 剥掉「帮我搜一下」', B.sanitizeQuery('帮我搜一下 js 闭包'));
-      } else log(false, 'sanitizeQuery 已导出');
-
-      // 6) 模型回退链：首选失败要换下一个，而不是直接扔「卡了一下」
-      log(/LLM_RETRY/.test(botSrc) && /s\.llmQueue/.test(botSrc),
-        'callLLM 建立多模型回退链（llmQueue + LLM_RETRY）');
-      log(/function next\(lastErr\)/.test(botSrc),
-        'callLLM 失败后按候选链依次重试');
-      log(/LLM_TIMEOUT = 30000/.test(botSrc),
-        'LLM_TIMEOUT 从 45s 降到 30s（用户更快看到结果或兜底）');
-
-      // 6.5) ⚠️⚠️ 真凶回归：ensureLLM 必须缓存 Promise，不能缓存布尔值
-      //   原实现 `if (s.llmTried) return Promise.resolve();` 在并发第二次调用时
-      //   会「立即 resolve 但 llmModel 还是 null」→ runGen 秒回 {fallback:true}
-      //   → 用户看到「哎呀我这边卡了一下」（模型明明可用，30 个都能列出来）
-      //
-      //   ⚠️ 断言必须先剥注释：源码注释里就写着 `s.llmTried` 这段历史（说明成因），
-      //      直接 `/s\.llmTried/` 会被自己的注释绊倒 → 假 FAIL（踩过）
-      const botCode = botSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-      log(!/s\.llmTried/.test(botCode) && /if \(s\.llmReady\) return s\.llmReady/.test(botCode),
-        'ensureLLM 缓存 Promise 而非布尔值（修并发竞态：曾导致 1 秒秒回「卡了一下」）',
-        /s\.llmTried/.test(botCode) ? '代码里还有 llmTried' : 'ok');
-
-      if (B.ensureLLM) {
-        const savedQ = LT.S.llmQueue, savedR = LT.S.llmReady, savedM = LT.S.llmModel;
-        delete LT.S.llmReady; LT.S.llmModel = null; LT.S.llmQueue = null;
-        const r = B.ensureLLM();
-        // ⚠️ 必须 await：models.list() 在测试桩里是异步 Promise，
-        //    llmQueue / llmModel 要等微任务跑完才被填充。同步断言必然拿到 null（踩过）
-        if (r && r.then) await r.catch(() => {});
-        log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue[0] === 'deepseek-v4.1-flash',
-          'ensureLLM 生成候选队列（队首仍是 deepseek-v4.1-flash）',
-          Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.join('>') : String(LT.S.llmQueue));
-        log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue.length >= 2,
-          '候选队列含多个模型（保证有回退目标）',
-          Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.length : 0);
-        log(LT.S.llmModel === 'deepseek-v4.1-flash',
-          'await 之后 llmModel 已就绪（不再是 null → 不会秒回「卡了一下」）', String(LT.S.llmModel));
-
-        // 并发：第二次调用必须复用同一个 Promise（不再是「立即 resolve 的空 Promise」）
-        const callsBefore = __llmListCalls;
-        const r2 = B.ensureLLM();
-        log(r2 === r || r2 === LT.S.llmReady, '并发第二次 ensureLLM 复用同一个 Promise（不是立即 resolve 的空 Promise）');
-        log(__llmListCalls === callsBefore, '并发调用不重复拉模型目录',
-          'delta=' + (__llmListCalls - callsBefore));
-        // 并发场景的真实验证：清空后同一 tick 内连调两次，第二次 await 后必须拿到模型
-        delete LT.S.llmModel; LT.S.llmQueue = null; delete LT.S.llmReady;
-        const p1 = B.ensureLLM(), p2 = B.ensureLLM();
-        await Promise.all([p1, p2]);
-        log(p1 === p2 && LT.S.llmModel === 'deepseek-v4.1-flash',
-          '⚠️ 并发两次 ensureLLM：第二个不再是「立即 resolve 空 Promise」，await 后模型已就绪',
-          'same=' + (p1 === p2) + ' model=' + String(LT.S.llmModel));
-        LT.S.llmQueue = savedQ; LT.S.llmReady = savedR; LT.S.llmModel = savedM;
-      } else log(false, 'ensureLLM 已导出');
-
-      // 7) 新闻源全挂时不再直接报错，退化为「联网检索 + 模型总结」
-      log(/function botNewsFallback/.test(botSrc),
-        '新闻/热点增加联网检索兜底（botNewsFallback）');
-      log(/botNewsFallback\('news'\)/.test(botSrc) && /botNewsFallback\('hot'\)/.test(botSrc),
-        'botNews/botHot 全源失败时走兜底而不是直接报错');
-      log(!/新闻源今天集体打不通了/.test(botSrc),
-        '删除「新闻源今天集体打不通了」的硬报错文案（改为有内容可给）');
-    } else {
-      log(false, 'window.LT_BOT 已导出（小美回归测试依赖它）');
-    }
+    // 7) 多模型回退链
+    log(/LLM_RETRY/.test(code) && /S\.llmQueue\.slice\(\)/.test(code),
+      'botLLM 有候选模型回退链（模型 × 带/不带 temperature）');
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
