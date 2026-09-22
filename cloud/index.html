@@ -34,7 +34,7 @@ body{font:14px -apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",Roboto,s
 .ib{background:transparent;border:none;cursor:pointer;color:var(--tx2);font-size:17px;width:32px;height:32px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
 .ib:hover{background:var(--hover);color:var(--tx)}
 .ib.off{opacity:.4}
-.av{border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;flex-shrink:0;background:#888}
+.av{border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;flex-shrink:0;background:#888;aspect-ratio:1/1;overflow:hidden}
 .av.s{width:30px;height:30px;font-size:15px;border-radius:6px}
 .av.m{width:38px;height:38px;font-size:20px}
 .av.l{width:56px;height:56px;font-size:30px;border-radius:12px}
@@ -1279,6 +1279,20 @@ function ensureBot() {
     S.profiles[BOT.id].avatar = BOT.avatar;   // 形象升级后同步旧数据
   }
   if (S.members && S.members.hall && S.members.hall.indexOf(BOT.id) < 0) S.members.hall.push(BOT.id);
+  syncBotAvatarToDB();
+}
+// 把正确形象写回数据库（每会话最多一次）：数据库里小美那行可能存着旧垫边图，
+// 不写回的话，旧缓存/旧版本页面读到的仍是旧图 → 头像上下被裁、露出底色。
+// RLS 限制或没有该行时静默失败，仅影响极少数旧客户端，不影响新代码（内存已纠正）。
+var botAvatarSynced = false;
+function syncBotAvatarToDB() {
+  if (botAvatarSynced) return;
+  botAvatarSynced = true;
+  try {
+    db.from('profiles').update({ avatar: BOT.avatar }).eq('id', BOT.id).then(function (r) {
+      if (r && r.error) throw r.error;
+    }).catch(function () {});
+  } catch (e) {}
 }
 
 // ---------- 工具 ----------
@@ -1382,6 +1396,8 @@ function convAv(c, cls) {
     if (c.isHall) return avOf('大厅', HALL_AVATAR.emoji, HALL_AVATAR.color, cls);
     return avOf(c.name, '', c.color, cls);
   }
+  // 小美：以代码内形象为准，避免读到数据库/缓存里的旧头像（上下被裁、露底色）
+  if (c.id === BOT.id) return avOf(BOT.name, BOT.avatar, BOT.color, cls);
   return avOfUser(c.id, cls);
 }
 function mutedOf(gid) {
@@ -2198,7 +2214,8 @@ function renderMsgs(scroll) {
     }
     // 头像以实时资料为准：旧消息里烘焙的头像可能过期（如小美形象升级）
     var pfl = S.profiles[m.sender_id];
-    if (pfl && pfl.avatar) m.sender_avatar = pfl.avatar;
+    if (m.sender_id === BOT.id) m.sender_avatar = BOT.avatar;   // 小美一律用代码内最新形象
+    else if (pfl && pfl.avatar) m.sender_avatar = pfl.avatar;
     var day = fmtDay(m.created_at);
     if (day !== lastDay) { html += '<div class="day"><span>' + day + '</span></div>'; lastDay = day; }
     // 行情卡片：居中展示，不带头像/气泡
