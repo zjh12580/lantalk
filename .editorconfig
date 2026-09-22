@@ -1,0 +1,17 @@
+# 与 .gitattributes 的 LF 约定保持一致
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+# 文档里的行尾空格是有意义的（Markdown 硬换行）
+trim_trailing_whitespace = false
+
+[*.{html,css,js,mjs,json}]
+indent_size = 2

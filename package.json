@@ -8,9 +8,13 @@
     "test": "node cloud/test-load.js && node cloud/test-intent.js",
     "test:load": "node cloud/test-load.js",
     "test:intent": "node cloud/test-intent.js",
+    "lint": "eslint cloud/server.js cloud/agent.js scripts/*.mjs && node scripts/lint-html.mjs",
+    "lint:js": "eslint cloud/server.js cloud/agent.js scripts/*.mjs",
+    "lint:html": "node scripts/lint-html.mjs",
     "stamp": "node scripts/stamp-version.mjs"
   },
   "devDependencies": {
+    "eslint": "^8.57.0",
     "jsdom": "^22.1.0"
   },
   "engines": {

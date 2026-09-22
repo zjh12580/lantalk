@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 下限（package.json 声明 >=16）与当前 LTS 都验证一遍
+        node-version: ['16', '20']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 使用 Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 两个测试都是自包含的：用桩 SDK / 本地 mock 服务，不触外网、不需要任何密钥
+      - name: 逻辑冒烟（页面全流程，379 项）
+        run: npm run test:load
+
+      - name: 接口与模型通道冒烟（18 项）
+        run: npm run test:intent
+
+      # 只拦 error（no-undef 等真 bug），warning（no-unused-vars 死代码）不阻断 CI：
+      # 存量死代码还有若干处待清，用 warns 放行可以让 CI 立刻可用，同时不掩盖新引入的错。
+      - name: ESLint（含 index.html 内联脚本）
+        run: npm run lint

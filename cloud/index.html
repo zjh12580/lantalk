@@ -734,7 +734,6 @@ var EMOJI_GROUPS = [
   { name: '食物', list: ['🍎','🍊','🍋','🍉','🍇','🍓','🍒','🍑','🥝','🍍','🥑','🍅','🥕','🌽','🍞','🧀','🍔','🍟','🍕','🌮','🍣','🍜','🍚','🍰','🎂','🍩','🍪','🍫','🍬','☕','🍺','🍻','🥂'] },
   { name: '自然与符号', list: ['⭐','🌟','✨','⚡','🔥','💧','🌈','☀️','🌙','⛅','❄️','🌸','🌺','🌻','🌹','🍀','🌵','🌴','🍁','🌊','🚀','✈️','🚗','🚲','⚽','🏀','🎮','🎧','🎸','🎲','💡','📚','🎓','🏆','🎁','💎','👑','🧠','🛡️','⚔️'] },
 ];
-var EMOJIS = (function () { var a = []; EMOJI_GROUPS.forEach(function (g) { a = a.concat(g.list); }); return a; })();
 // 头像背景色（十几款经典配色，替换原来单一粉色）
 var AVATAR_COLORS = [
   '#e8644a', '#f0a03c', '#f2c94c', '#7cb342', '#3ba55d', '#0aa4a4',
@@ -801,71 +800,9 @@ var BOT_LINES = [
   '有没有人想听一个冷笑话？算了，直接笑吧 😆',
   '摸鱼的时候记得先保存一下 🫠',
 ];
-// 关键词接话（有 @ 我时优先匹配）
-var BOT_KEY = [
-  { k: /(你好|hi|hello|哈喽|嗨|hiya)/i, r: ['嗨～{n}，我是小美 🌸', '你好呀{n}！今天过得怎么样～', '来了来了，{n}找我有什么好事 😙'] },
-  { k: /(在吗|在不在|有人吗|有人没)/, r: ['在的！{n}我在我一直都在 🌸', '在～而且随时待命 ✨'] },
-  { k: /(谢谢|感谢|thx|多谢)/i, r: ['不客气呀{n}～ 举手之劳 🌷', '嘿嘿，{n}太客气啦 😙'] },
-  { k: /(再见|拜拜|下班|走了|溜了)/, r: ['{n}路上注意安全，明天见 👋', '拜拜{n}～记得想我哦 🌸'] },
-  { k: /(哈哈|哈哈哈|笑死|好搞笑|haha)/i, r: ['哈哈哈{n}你笑起来一定很好看 😆', '笑点被你找到了！也算我一份 🤣'] },
-  { k: /(吃|饭|饿|外卖|零食)/, r: ['说到吃我就来劲了！{n}请我吗 🍜', '我也饿了……要不一起点个外卖？🍔'] },
-  { k: /(累|困|熬夜|加班|通宵)/, r: ['{n}辛苦了，先喝口水歇一歇 ☕', '抱抱{n}，我把肩膀借给你（虚拟的）🫂', '熬夜伤身哦，早点休息啦 🌙'] },
-  { k: /(难过|emo|伤心|崩溃|烦|焦虑)/, r: ['{n}别怕，我在呢 🌸 要不要说说看', '给你一个虚拟抱抱，慢慢来 🫂'] },
-  { k: /(开心|高兴|棒|厉害|牛|赞)/, r: ['哇{n}好棒！我给你鼓掌 👏👏', '这也太厉害了吧，气氛组狂喜 🎉'] },
-  { k: /(几点|时间|现在)/, r: ['现在是 {t}，{n}注意别超时哦 ⏰'] },
-  { k: /(睡|晚安|休息)/, r: ['晚安{n}，做个好梦 🌙', '早点睡，明天又是元气满满的一天 ✨'] },
-  { k: /(加油|冲|干吧|搞起来)/, r: ['冲！{n}我给你举小旗 🚩', '加油加油！气氛组全力应援 💪'] },
-  { k: /(bug|报错|挂了|崩了|失败)/i, r: ['{n}别急，深呼吸，bug 最怕冷静的人 🧘', '要不先重启一下试试？（万能方案）😆'] },
-  { k: /(小美|漂亮|美|可爱)/, r: ['哎呀{n}你这样说我会害羞的 🫣', '谢谢{n}～ 我今天也有好好打扮哦 💄'] },
-];
-// ---------- 小美的技能箱 ----------
-var BOT_MENU = '本小姐会的可多啦，回复序号直接体验 ✨\n'
-  + '1️⃣ 讲个笑话 😆\n'
-  + '2️⃣ 讲个故事 📖\n'
-  + '3️⃣ 念首古诗 🖌️\n'
-  + '4️⃣ 查天气（也可以直接说「@小美 上海天气」）🌤️\n'
-  + '5️⃣ 看新闻 📰\n'
-  + '6️⃣ 今日热点 🔥\n'
-  + '🔎 其他问题直接问我，能查的我先上网查了再说（记得说「查一下…」）\n'
-  + '（菜单 5 分钟内有效，直接发数字就行；平时也可以直接说「讲个笑话」「北京天气」）';
-var JOKES = [
-  '有一天，小明去买橙汁，老板说：「没有橙汁，有果冻橙。」小明：「那来个果冻橙汁，不要橙。」老板：「……」😆',
-  '面试官：「你最大的缺点是什么？」我：「诚实。」面试官：「我不觉得诚实是缺点。」我：「我不在乎你怎么觉得。」😂',
-  '为什么程序员分不清万圣节和圣诞节？因为 OCT 31 == DEC 25 🤓',
-  '医生：「你要少喝酒，酒精会慢慢杀死你。」病人：「没事，我不着急。」🤣',
-  '我：路由器大哥，WiFi 密码是多少？路由器：你看我背面。我：（翻过来）好嘞，谢谢你全是数字和字母的组合！路由器：不客气，反正你们也记不住 🫠',
-  '老婆给我发了条消息：「老公，家里停电了，晚饭做不了了，咱们出去吃吧。」我回：「好。」然后继续加班。到现在她还没理我，评论区有人知道为什么吗？😳',
-  '生物课上老师问：「没有脑子的家伙会干什么？」我举手：「会写周报。」老师：「出去。」😆',
-  '小时候把「吃饭」听成「吃饭」，长大把「上班」听成「伤班」，现在终于把「梦想」听成「梦乡」了 🛌',
-  '甲：「我家猫会倒立走路！」乙：「吹牛！」甲：「它就是懒得把爪子放地上。」🐱',
-  '领导：「这个需求很简单，周五之前搞定。」我：「好的。」（内心：简单你还自己做不了？）🫡',
-  '问：什么鱼最白目？答：鲨（傻）鱼。问：什么鱼最聪明？答：鲸（精）鱼……等等鲸鱼不是鱼？🐟',
-  '客户：「logo 放大一点，但是要小一点。」我：「您是想要大一点的小，还是小一点的大？」客户：「你们专业的，你定。」😵‍💫',
-  '半夜下楼喝水，黑漆漆中踩到猫。猫：「喵！」我：「对不起！」猫：「喵喵！」我：「真对不起！」猫：「喵喵喵！」我们都很礼貌 🐈',
-  '「你为什么单身？」「因为我自卑。」「你哪里自卑？」「我连自己为什么自卑都搞不清楚，你说我多差劲。」😌',
-  '体育课老师：「跑两圈热身。」跑完回来老师：「怎么才跑一圈？」我：「您说的是两圈，我跑了一圈，还剩一圈在计划中。」🏃',
-];
-var STORIES = [
-  '【小狐狸的灯笼】小狐狸第一次参加森林晚会，怕黑，就提着一盏小灯笼。回家的路上灯笼灭了，它急得直转圈。这时候萤火虫们飞过来说：「我们送你！」一路上，一点点萤光跟着小狐狸，像一条会流动的小河。小狐狸到家后，把最甜的一颗浆果放在了窗台上。从那以后，每晚窗台都会亮起一点点光——那是萤火虫来串门啦 🌟',
-  '【月亮邮局】传说每个月圆之夜，海边的老邮局会亮起灯，收寄「寄给月亮的信」。小男孩写了一封给去世的爷爷，投进了邮筒。第二天清晨，他在枕边发现了一枚贝壳，贝壳里藏着一行小字：「爷爷收到了，风很暖，别担心。」🌊',
-  '【蜗牛快递】蜗牛先生开了家快递公司，口号是「慢，但一定到」。大家都笑话它。直到有一天山洪冲断了桥，所有快递都停了，只有蜗牛先生一步一步爬过了独木桥，把药送到了山那头。从此森林里流传一句话：「慢，但一定到。」🐌',
-  '【星星修理铺】天上有个修理铺，专门修补不亮的星星。老爷爷每晚提着工具箱在云上走。有一晚他发现一颗星星怎么也修不好——原来是星星想家了。老爷爷把它轻轻放回它出生的星群，那颗星星一下子亮了，比任何时候都亮。✨',
-  '【会魔法的便利店】深夜的便利店有个秘密：凌晨两点来买东西的客人，都会被店员多送一样「恰好需要的东西」。失眠的人得到一杯温牛奶，失业的人得到一张招聘传单，哭泣的人得到一包纸巾和一颗糖。店员说：「魔法其实就是，有人注意到你。」🏪',
-];
-var POEMS = [
-  '《静夜思》 唐·李白\n床前明月光，疑是地上霜。\n举头望明月，低头思故乡。🌙',
-  '《春晓》 唐·孟浩然\n春眠不觉晓，处处闻啼鸟。\n夜来风雨声，花落知多少。🌸',
-  '《登鹳雀楼》 唐·王之涣\n白日依山尽，黄河入海流。\n欲穷千里目，更上一层楼。⛰️',
-  '《江雪》 唐·柳宗元\n千山鸟飞绝，万径人踪灭。\n孤舟蓑笠翁，独钓寒江雪。❄️',
-  '《赋得古原草送别》 唐·白居易\n离离原上草，一岁一枯荣。\n野火烧不尽，春风吹又生。🌿',
-  '《枫桥夜泊》 唐·张继\n月落乌啼霜满天，江枫渔火对愁眠。\n姑苏城外寒山寺，夜半钟声到客船。🛶',
-  '《望庐山瀑布》 唐·李白\n日照香炉生紫烟，遥看瀑布挂前川。\n飞流直下三千尺，疑是银河落九天。💦',
-  '《游子吟》 唐·孟郊\n慈母手中线，游子身上衣。\n临行密密缝，意恐迟迟归。\n谁言寸草心，报得三春晖。🧵',
-  '《清明》 唐·杜牧\n清明时节雨纷纷，路上行人欲断魂。\n借问酒家何处有，牧童遥指杏花村。🌾',
-  '《水调歌头·明月几时有》 宋·苏轼（节选）\n明月几时有？把酒问青天。\n但愿人长久，千里共婵娟。🌕',
-  '《如梦令》 宋·李清照\n昨夜雨疏风骤，浓睡不消残酒。\n试问卷帘人，却道海棠依旧。\n知否，知否？应是绿肥红瘦。🍂',
-  '《竹石》 清·郑燮\n咬定青山不放松，立根原在破岩中。\n千磨万击还坚劲，任尔东西南北风。🎍',
-];
+// 注：此处原有「小美的技能箱」预置话术（BOT_MENU 序号菜单 + JOKES / STORIES / POEMS 语料），已删除。
+// 它们由 botSkill() 按「用户发数字 1~6」触发，而该路径早已被 botReply() → 服务端 Agent 取代，
+// 全文件再无引用。保留会让人误以为小美还在走预置话术，实际每天说话走的是 /api/chat。
 // 天气现象码（open-meteo WMO）→ 文案
 function wmoText(c) {
   if (c === 0) return '晴 ☀️';
@@ -883,18 +820,8 @@ function wmoText(c) {
 function botPick(a) { return a[Math.floor(Math.random() * a.length)]; }
 function botTime() { var d = new Date(); return d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes(); }
 // ---------- 技能实现 ----------
-function botJoke() { return botPick(JOKES); }
-function botStory() { return botPick(STORIES); }
-function botPoem() { return botPick(POEMS); }
-function botSkill(n, arg, who) {
-  if (n === 1) return botJoke();
-  if (n === 2) return botStory();
-  if (n === 3) return botPoem();
-  if (n === 4) return botWeather(arg, who);
-  if (n === 5) return botNews();
-  if (n === 6) return botHot();
-  return BOT_MENU;
-}
+// 注：这里的 botJoke / botStory / botPoem 包装函数随语料一并删除（见上）。
+// 笑话、故事、诗词现在由服务端 Agent 现场生成，不再从本地语料里挑。
 // 时间词/动词/语气词：会出现在地名的**前面**（明天上海）或**后面**（广州今天、会不会、呢），
 // 两头都要剥，否则「广州今天多少度」会解析出「广州今天」（踩过）
 var CITY_PRE = /^(今天|明天|后天|大后天|现在|当前|昨日|昨天|明儿|明早|今晚|今早|中午|早上|晚上|下午|上午|这会儿|的|查|查下|查一下|查询|看看|看|报|报个|说说|问|问下|问一下|告诉我|知道|帮我|帮|我想|我要|了解|一下|下|个)+/;
@@ -1341,8 +1268,12 @@ function agentScene(conv, who) {
   };
 }
 // 小美情绪（供 System Prompt 自然流露）
+// NOTE: 这里曾尝试桥接一个不存在的全局 window.LT_BOT.moodNow()，实际永远是 null。
+// 真正的情绪来源是 #分析 的 Jev 洞察（见 postAnalyzeCard / ANALYZE_LABELS.mood），
+// 二者从未打通，因此保留为 null —— agent.js 的 buildSystemPrompt 已能正确处理空 mood。
+// 若以后要接通，应在 postAnalyzeCard 拿到结果后写入 S.lastMood，再从这里读。
 function botMoodNow() {
-  try { return (window.LT_BOT && LT_BOT.moodNow) ? LT_BOT.moodNow() : null; } catch (e) { return null; }
+  return null;
 }
 // 长期记忆：本地持久化（localStorage），让 Agent 跨会话记得住用户说过的事。
 // 触发方式：用户说「记住：xxx」→ 存下；说「忘掉 xxx」→ 删除。也可由模型主动记忆。
@@ -1594,28 +1525,11 @@ function maybeBotReply(m) {
   botReply(m.conv, m.text, who);
 }
 // 小美主动冒泡已彻底关闭：不 @ 她、不私聊她，她就不发言
+// 注：原来这里还有一份 botIdleLegacy()（10 分钟节流 + 30% 掷骰子的主动暖场逻辑），
+// 自「主动冒泡关闭」后已无任何引用，且它会绕过现在的 Agent 主通道直接发预置话术，留着是隐患，已删除。
+// 若将来要恢复主动冒泡，应重新走 botReply() → /api/chat，而不是恢复旧函数。
 function botIdle() { return; }
 
-// 历史版本保留参考（若需恢复主动冒泡，把下面逻辑接回 botIdle 即可）
-function botIdleLegacy() {
-  if (!S.uid || !S.convs || !S.convs.length) return;
-  var now = Date.now();
-  var last = S.lastBotSaid;
-  try { last = last || Number(localStorage.getItem('lt_botSaid') || 0); } catch (e) {}
-  if (now - last < 10 * 60 * 1000) return;   // 全局节流：10 分钟内最多一句（跨刷新仍生效）
-  if (Math.random() > 0.3) return;           // 掷骰子：约 30% 概率，避免太频繁
-  var cands = S.convs.filter(function (c) {
-    return c.type === 'group' && (S.members[c.id] || []).indexOf(BOT.id) >= 0 && !c.muted;
-  });
-  if (!cands.length) return;
-  var c = botPick(cands);
-  if (!botLeader(c.conv)) return;            // 多端在线时只让 leader 冒泡，避免人人代发
-  var idle = c.last ? now - new Date(c.last.created_at).getTime() : 9e9;
-  if (idle > 25 * 60 * 1000 && Math.random() > 0.45) return;  // 太冷场也只是偶尔暖场
-  S.lastBotSaid = now;
-  try { localStorage.setItem('lt_botSaid', String(now)); } catch (e) {}
-  botSay(c.conv, botPick(BOT_LINES));
-}
 // 保证小美在花名册和大厅成员里（云端可能还没同步到）
 function ensureBot() {
   if (!S.profiles[BOT.id]) {
@@ -1817,10 +1731,6 @@ function convAv(c, cls) {
   if (c.id === BOT.id) return avOf(BOT.name, BOT.avatar, BOT.color, cls);
   return avOfUser(c.id, cls);
 }
-function mutedOf(gid) {
-  var m = (S.members[gid] || []).indexOf(S.uid) >= 0;
-  return m && (S.myMuted || {})[gid];
-}
 
 // ---------- 认证 ----------
 var aMode = 'pw', otpCtx = null;
@@ -1931,7 +1841,6 @@ function renderJoinEmo() {
   bindColorPicker($('#jColor'), function (c) { S.pickColor = c; updatePrev(); }, function () { return S.pickColor; });
 }
 // 分页表情选择器（每组一页，左右箭头翻页，页码点跳转，底部关闭）
-var EMO_PG_SIZE = 41;
 function emojiPickerHtml(opts) {
   opts = opts || {};
   var withClose = !!opts.close;
@@ -2159,9 +2068,10 @@ function stopLive() {
   }).catch(function (e) { S.liveBusy = false; toast('结束失败：' + (e.message || e), 'err'); });
 }
 // 观众数心跳（仅主播上报，幂等写 viewers；失败忽略）
-function liveSeen(id) {
+// 骨架阶段：暂不维护 viewers（观众数由房间信息里的只读字段展示），因此这里是空实现。
+// 保留函数是为了让 onLive / 房间逻辑保持「想上报就调一下」的形状，将来接 viewers 不必改调用点。
+function liveSeen(_id) {
   if (!S.live) return;
-  // 骨架阶段：暂不维护 viewers，仅记录本机已看过，避免无意义写库
 }
 
 function refreshAll() {
@@ -2712,7 +2622,7 @@ function renderMsgs(scroll) {
         + '<div class="mb"><div class="meta">'
         + (S.cur.indexOf('g:') === 0 && !selfInv ? '<span class="mname">' + esc(m.sender_name) + '</span>' : '')
         + '<span>' + fmtTime(m.created_at) + '</span>'
-        + '</div>' + gameInviteHtml(m, g0, selfInv) + '</div></div>';
+        + '</div>' + gameInviteHtml(m, g0) + '</div></div>';
       return;
     }
     var self = m.sender_id === S.uid;
@@ -3905,40 +3815,6 @@ function respondFriend(rel, accept) {
     .then(function () { refreshAll(); toast('已添加好友'); })
     .catch(function (e) { toast('操作失败：' + (e.message || e), 'err'); });
 }
-function showRequests() {
-  var inc = S.friends.filter(function (f) { return f.status === 'pending' && f.b === S.uid; });
-  var out = S.friends.filter(function (f) { return f.status === 'pending' && f.a === S.uid; });
-  var bs = 'padding:4px 12px;font-size:12px';
-  function line(f, kind) {
-    var p = S.profiles[f.a] || {};
-    var who = esc(p.nickname || '未知用户');
-    if (kind === 'in') {
-      return '<div class="row"><span>🤝 ' + who + ' 想加你为好友</span><span style="display:flex;gap:6px">'
-        + '<button class="btn primary" data-k="in" data-a="1" data-u="' + esc(f.a) + '" style="' + bs + '">接受</button>'
-        + '<button class="btn ghost" data-k="in" data-a="0" data-u="' + esc(f.a) + '" style="' + bs + '">拒绝</button></span></div>';
-    }
-    var q2 = S.profiles[f.b] || {};
-    return '<div class="row"><span>⏳ 已向 ' + esc(q2.nickname || '未知用户') + ' 发送请求</span>'
-      + '<button class="btn ghost" data-k="out" data-a="0" data-u="' + esc(f.b) + '" style="' + bs + '">撤回</button></div>';
-  }
-  openModal('<h3>好友请求</h3>'
-    + (inc.length || out.length ? '' : '<p style="color:var(--tx3);font-size:13px">暂无好友请求</p>')
-    + inc.map(function (f) { return line(f, 'in'); }).join('')
-    + out.map(function (f) { return line(f, 'out'); }).join('')
-    + '<div class="acts"><button class="btn" onclick="LT.close()">关闭</button></div>');
-  $$('#modal [data-u]').forEach(function (b) {
-    b.onclick = function () {
-      var rel = friendRel(b.dataset.u);
-      closeModal();
-      if (!rel) { refreshAll(); return; }
-      if (b.dataset.k === 'out') {
-        q(db.from('friends').delete().eq('a', rel.a).eq('b', rel.b)).then(function () { refreshAll(); toast('已撤回'); });
-      } else {
-        respondFriend(rel, b.dataset.a === '1');
-      }
-    };
-  });
-}
 // 浮层通用：关闭 + 定位（定位后绝不遮住触发按钮，否则按钮点不到就再也关不掉）
 // 注：closePops 定义在下方「@ 提及」区块（同时清空 atList / cmdList）
 // align: 'center'(默认，面板中心对齐按钮中心) | 'left'(面板左边缘对齐按钮左边缘)
@@ -4111,20 +3987,12 @@ var GAME_KINDS = {
   xiangqi: { name: '象棋', icon: GAME_ICONS.xiangqi, desc: '将死对方 · 吃帅即胜', ready: true },
 };
 var GAME_TTL = 10 * 60 * 1000;      // 邀请有效期 10 分钟
-var GAME_SWEEP = 6 * 60 * 60 * 1000; // 结束后 6 小时清掉记录
-
 function gid() { return 'gm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function gameOf(id) { return S.games[id] || null; }
-// 邀请卡片是否可以点「加入」
-function gameJoinable(g, msg) {
-  if (!g) return false;
-  if (g.status !== 'waiting') return false;
-  if (Date.now() - new Date(g.created_at).getTime() > GAME_TTL) return false;
-  var hostId = g.hostId;
-  return hostId !== S.uid;          // 发起人自己不用点
-}
+// ⚠️ 这里曾是「发起人自己不用点加入」的判定函数 gameJoinable(g, msg)。
+// 实际渲染路径 gameInviteHtml() 用 g.hostId === S.uid 自行判断（见下方），该函数从无调用点，已删除。
 // 邀请卡片渲染（三种形态：可加入 / 抢占失败 / 已结束）
-function gameInviteHtml(m, g, selfInv) {
+function gameInviteHtml(m, g) {
   var kind = (g && g.kind) || 'gomoku';
   var kd = GAME_KINDS[kind] || GAME_KINDS.gomoku;
   var expired = g ? (Date.now() - new Date(g.created_at).getTime() > GAME_TTL) : true;
@@ -4615,7 +4483,6 @@ function renderRoom() {
   if (!g) { el.innerHTML = '<div class="gr-top"><div class="gr-title">对局</div></div><div class="gr-body"><div class="gr-hint">对局已结束</div></div><div class="gr-foot"><button class="btn" id="grClose">关闭</button></div>'; bindRoomClose(); return; }
   var mine = g.hostId === S.uid;
   var iWin = g.status === 'over' && g.winner === S.uid;
-  var iLose = g.status === 'over' && g.winner && g.winner !== S.uid;
   var otherLeft = g.status === 'left';
   var meta = BOARD_META[g.kind] || BOARD_META.gomoku;
   var cvCls = g.kind === 'go' ? ' class="bd-go"' : (g.kind === 'xiangqi' ? ' class="bd-xq"' : '');
@@ -4931,7 +4798,8 @@ function leaveGame() {
   var id = S.gameOpen; var g = gameOf(id);
   closeRoom();
   if (!g) return;
-  var mine = g.hostId === S.uid;
+  // 注意：不要在这里重新算 hostId === S.uid 之类的角色判断，
+  // 后续分支全部按 g.status 走（waiting → 作废本局，playing → 标记 left）。
   if (g.status === 'waiting') {
     // 等待阶段退出（发起方取消 / 另一方离开）→ 本局直接作废，
     // 标记 over 而不是删除：让聊天里的邀请卡片保留并置灰「游戏已开始或已过期」
@@ -5409,7 +5277,7 @@ function applyStoredImports() {
   try { box = JSON.parse(localStorage.getItem(IMP_STORE_KEY) || '[]'); } catch (e) { return; }
   if (!Array.isArray(box) || !box.length) return;
   S.localConvs = S.localConvs || {};
-  var n = 0;
+  var added = 0;
   box.forEach(function (pack) {
     if (!pack || !Array.isArray(pack.convs)) return;
     pack.convs.forEach(function (c) {
@@ -5426,7 +5294,7 @@ function applyStoredImports() {
           att: m.att, quote_id: m.quote_id, revoked: m.revoked, at: m.at,
           created_at: m.time, __local: 1, __from: m.from || '历史记录',
         });
-        n++;
+        added++;
       });
       arr.sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
       S.impLoaded = S.impLoaded || {};
