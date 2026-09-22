@@ -243,6 +243,11 @@ var S = {
   impLoaded: {},        // 会话 -> 是否已导入过本地聊天记录（需与云端合并，每次进会话都重拉）
   anim: {},             // 会话 -> 本次要播放入场动画的消息 id 集合（仅新消息，重渲染不闪）
   seenReqs: {}, seenFriends: {},
+  // ⚠️ atMe 必须像 unread 一样「挂在 S 上、由 buildConvs 回填」，不能挂在会话对象上：
+  //    onNew 里设完 c.atMe 紧接着就会调 buildConvs()，而 buildConvs 是**整体重建**
+  //    S.convs（每个会话都是全新对象），挂在旧对象上的标记当场丢失 ——
+  //    表现就是「有人 @ 我」的侧栏高亮永远不出现（实测 atMe 恒为 undefined）。
+  atMe: {},               // 会话 -> 1：有人在这条会话里 @ 了我（进会话时清除）
   reply: null, filter: 'all', q: '', info: false, theme: 'dark', sound: true,
   pickAvatar: '', pickColor: '', tickCount: 0, lastBeat: 0, busy: false,
   attach: [],            // 待发送附件队列（粘贴/选择后先预览，点发送才上传）
@@ -256,6 +261,10 @@ var S = {
   gameBusy: false,       // 对局操作进行中（防重复落子）
   gameLeaveT: null,      // 对手离开的 3 秒倒计时定时器
   gameLeaveN: 0,         // 倒计时剩余秒数
+  // 象棋「当前选中的棋子」[行,列]。⚠️ 它是**对局级**状态，换局/关浮层必须清空：
+  //   否则从 A 局退出时带着选中的棋子进 B 局，新棋盘的同一个坐标上可能是对方的
+  //   子甚至空格，点一下目标格就直接用旧坐标走子（走非法步或直接吃掉自己人）。
+  xqSel: null,
   atList: [],            // @ 成员候选列表（输入 @ 时弹出）
   atIdx: 0,              // @ 候选高亮下标
   atSuppress: 0,         // @ 浮层抑制截止时间戳（选中后短暂不再弹）
@@ -361,7 +370,8 @@ function botWeather(text, who) {
 // 新闻/热点：多源轮询（都是免 key 公益源，哪个通用哪个；全挂就诚实说挂了）
 function parse60s(j) {
   var d = j && (j.data || j.info || j);
-  if (d && Array.isArray(d.news)) d = { news: d.news, date: d.date || (d.date && d.date), weiyu: d.weiyu || d.dailySay || '' };
+  // 原来这里写的是 d.date 与自身的恒等或运算（后半句永远等价、且 date 后面根本没用到）
+  if (d && Array.isArray(d.news)) d = { news: d.news, date: d.date || '', weiyu: d.weiyu || d.dailySay || '' };
   if (!d) return null;
   var arr = d.news || d.list || d.items || (Array.isArray(j) ? j : null);
   if (!arr || !arr.length) return null;
@@ -1430,7 +1440,11 @@ $('#jGo').onclick = function () {
       else $('#jErr').textContent = '进入失败：' + msg;
     });
 };
-$('#jName').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('#jGo').click(); });
+// 同样要挡 IME 回车：否则用拼音输昵称时，回车上字会直接提交（昵称变成半截拼音）
+$('#jName').addEventListener('keydown', function (e) {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'Enter') $('#jGo').click();
+});
 
 function enterApp() {
   $('#auth').classList.add('hidden');
@@ -1604,6 +1618,9 @@ function buildConvs() {
     unread[cv] = n;
   });
   S.unread = unread;
+  // 每条会话都从 S.atMe 回填「有人 @ 我」标记（见 S.atMe 定义处的说明）。
+  // 放在末尾：上面 localConvs 追加进来的会话也要一起回填。
+  list.forEach(function (c) { c.atMe = !!S.atMe[c.conv]; });
   S.convs = list;
 }
 function isFriend(pid) {
@@ -1822,7 +1839,9 @@ function onNew(m) {
     notify(c.name, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
     if (S.sound) beep();
   }
-  if ((m.mentions || []).indexOf(S.uid) >= 0) { c.atMe = true; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
+  // 记在 S.atMe 上而不是 c 上：下面这行 buildConvs() 会整体重建 S.convs，
+  // 挂在会话对象上的标记会被丢掉（见 S.atMe 定义处的说明）。
+  if ((m.mentions || []).indexOf(S.uid) >= 0) { S.atMe[m.conv] = 1; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
   // 重算会话列表：最新消息预览 / 排序 / 未读红点一次性对齐
   if (added) buildConvs();
   renderConvs();
@@ -1981,7 +2000,7 @@ function openConv(conv) {
   if (c.type === 'group' && c.announcement) { $('#annBar').classList.remove('hidden'); $('#annBar').textContent = '📢 ' + c.announcement; }
   else $('#annBar').classList.add('hidden');
   S.unread[conv] = 0;
-  c.atMe = false;
+  delete S.atMe[conv];   // 进会话即视为已读 @ 提醒（旧写法 c.atMe=false 会被 buildConvs 重建冲掉）
   renderConvs();
   if (S.info) renderInfo();
   // ⚠️ 判定「是否已拉过历史」必须用显式标记，**不能用 S.msgs[conv] 是否存在**：
@@ -2276,12 +2295,40 @@ function msgAct(act, id) {
     $('#rText').textContent = '回复 ' + m.sender_name + '：' + (m.text || m.file_name || (m.type === 'image' ? '[图片]' : ''));
     $('#input').focus();
   } else if (act === 'copy') {
-    navigator.clipboard.writeText(m.text || '').then(function () { toast('已复制'); }, function () { toast('复制失败', 'err'); });
+    copyText(m.text || '');
   } else if (act === 'revoke') {
     q(db.from('messages').update({ revoked: true, text: '' }).eq('id', m.id)).then(function () {
       m.revoked = true; m.text = ''; renderMsgs(); renderConvs(); toast('已撤回');
     }).catch(function (e) { toast('撤回失败：' + (e.message || e), 'err'); });
   }
+}
+
+// 复制到剪贴板：navigator.clipboard 只在安全上下文（https / localhost）存在，
+// 直连 http://192.168.x.x 这种内网地址时它是 undefined —— 原来直接
+// navigator.clipboard.writeText(...) 会当场抛 TypeError，点「复制」毫无反应
+// 还往控制台扔异常。这里补一条 execCommand 的兜底路径。
+function copyText(s) {
+  var str = String(s == null ? '' : s);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(str).then(function () { toast('已复制'); }, function () { legacyCopy(str); });
+    return;
+  }
+  legacyCopy(str);
+}
+function legacyCopy(str) {
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = str;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, str.length);
+    var ok = document.execCommand('copy');
+    ta.remove();
+    toast(ok ? '已复制' : '复制失败', ok ? '' : 'err');
+  } catch (e) { toast('复制失败', 'err'); }
 }
 
 // ---------- 预置指令（输入 # 唤起，效果参考 Telegram 指令菜单） ----------
@@ -2429,14 +2476,22 @@ function fetchCrypto(sym) {
     fetch(mk('usd')).then(function (r) { return r.json(); }),
     fetch(mk('cny')).then(function (r) { return r.json(); })
   ]).then(function (rs) {
-    var usd = rs[0][0], cny = rs[1][0];
+    // 两个请求互相独立：CoinGecko 对部分币种不返回 cny 计价（返回空数组），
+    // 也可能返回 {error:...} 对象而非数组。之前只校验了 usd，cny 为空时下面
+    // 直接读 cny.current_price 抛 TypeError，卡片会渲染成「⚠️ Cannot read
+    // properties of undefined」——用户看到的是一条莫名其妙的错误。
+    var ua = Array.isArray(rs[0]) ? rs[0] : ((rs[0] && rs[0].coins) || []);
+    var ca = Array.isArray(rs[1]) ? rs[1] : ((rs[1] && rs[1].coins) || []);
+    var usd = ua[0], cny = ca[0];
     if (!usd || !usd.current_price) throw new Error('未获取到行情');
     var pct = usd.price_change_percentage_24h;
     var cls = pct > 0.0001 ? 'up' : (pct < -0.0001 ? 'down' : 'flat');
     var sign = pct > 0 ? '+' : '';
+    var cnyPrice = cny && cny.current_price;   // 取不到人民币价就只显示美元价
     var rows = [
       { k: '时间', v: fmtCardTime(usd.last_updated) },
-      { k: '价格', v: '¥' + fmtNum(cny.current_price) + '  /  $' + fmtNum(usd.current_price) },
+      { k: '价格', v: cnyPrice ? '¥' + fmtNum(cnyPrice) + '  /  $' + fmtNum(usd.current_price)
+                               : '$' + fmtNum(usd.current_price) },
       { k: '当日涨跌幅', v: sign + fmtNum(pct) + '%', cls: cls },
       { k: '成交量(24h)', v: '$' + fmtVol(usd.total_volume) }
     ];
@@ -2505,7 +2560,9 @@ function postCard(card, local) {
     if (pushMsg(S.cur, m)) renderMsgs('bottom');
     return;
   }
-  sendMsg({ type: 'card', text: JSON.stringify(card), mentions: [], reply_to: null });
+  // sendMsg 不再内部吞错（见其定义处的说明），这里是一次性卡片、无需兜底，静默即可
+  sendMsg({ type: 'card', text: JSON.stringify(card), mentions: [], reply_to: null })
+    .catch(function () {});
 }
 // ---------- 聊天洞察（Jev 分析当前会话情绪/意图/好感/质量）----------
 var ANALYZE_LABELS = {
@@ -2721,7 +2778,12 @@ function sendMsg(o) {
     renderMsgs('bottom'); buildConvs(); renderConvs();
     if (m && m.type !== 'card') maybeBotReply(m);
     return m;
-  }).catch(function (e) { toast('发送失败：' + (e.message || e), 'err'); });
+  });
+  // ⚠️ 这里**不能**自己 catch 掉错误：原来 sendMsg 内部吞掉异常并弹 toast，
+  //    返回的是一个「已解决」的 promise，doSend 的 chain.catch 永远不会触发，
+  //    于是「发送失败把内容还给用户」的兜底形同虚设 —— 用户只看到一句
+  //    「发送失败」，刚写的整段话和挑好的图片已经没了。
+  //    改为向外抛，由调用方决定怎么提示、怎么兜底。
 }
 function detectMentions(text) {
   var out = [];
@@ -2766,16 +2828,40 @@ function renderAttach() {
   $$('#attBar .adel').forEach(function (b) {
     b.onclick = function () {
       var i = +b.dataset.i, a = S.attach[i];
-      if (a && a.url) { try { URL.revokeObjectURL(a.url); } catch (e) {} }
+      revokeAttach([a]);
       S.attach.splice(i, 1);
       renderAttach();
     };
   });
 }
+// 释放预览用的 blob URL。⚠️ 释放后必须把 url 置空：restoreDraft 靠「url 为空」
+// 判断需要重新 createObjectURL，否则恢复出来的预览图是死链。
+function revokeAttach(list) {
+  (list || []).forEach(function (a) {
+    if (!a) return;
+    if (a.url) { try { URL.revokeObjectURL(a.url); } catch (e) {} }
+    a.url = '';
+  });
+}
 function clearAttach() {
-  S.attach.forEach(function (a) { if (a.url) { try { URL.revokeObjectURL(a.url); } catch (e) {} } });
+  revokeAttach(S.attach);
   S.attach = [];
   renderAttach();
+}
+// 发送失败兜底：doSend 在发起请求前就把输入框和附件队列清空了，
+// 原来失败只弹一个 toast，用户刚敲的一段话和挑好的图片就没了。这里还回去。
+function restoreDraft(text, atts) {
+  var el = $('#input');
+  if (text && !el.value) { el.value = text; autoH(); }
+  if (atts && atts.length) {
+    atts.forEach(function (a) {
+      if (a.isImg && !a.url && a.file && window.URL && URL.createObjectURL) {
+        try { a.url = URL.createObjectURL(a.file); } catch (e) { a.url = ''; }
+      }
+    });
+    S.attach = atts.concat(S.attach);
+    renderAttach();
+  }
 }
 function uploadAttach(a) {
   var safe = String(a.name || 'file').replace(/[^\w.\u4e00-\u9fa5-]/g, '_').slice(0, 60);
@@ -2794,11 +2880,12 @@ function doSend() {
   var t0 = text.trim();
   if (t0.charAt(0) === '#') { el.value = ''; autoH(); closePops(); handleHashCmd(t0); return; }
   var atts = S.attach.slice();
-  if (!text.trim() && !atts.length) return;
+  if (!t0 && !atts.length) return;
   var mentions = detectMentions(text);
   el.value = ''; autoH();
   clearAttach();
   var chain = Promise.resolve();
+  var sentCount = 0;   // 已成功发出的附件数（多附件中途失败时只补回没发出去的那部分）
   if (!atts.length) {
     chain = chain.then(function () { return sendMsg({ type: 'text', text: text, mentions: mentions }); });
   } else {
@@ -2810,15 +2897,25 @@ function doSend() {
             type: o.type, text: i === 0 ? text : '', file_path: o.file_path,
             file_name: o.file_name, file_size: o.file_size, mime: o.mime,
             mentions: i === 0 ? mentions : [],
-          });
+          }).then(function (m) { sentCount++; return m; });
         });
       });
     });
   }
-  chain.catch(function (e) { toast('发送失败：' + (e.message || e), 'err'); });
+  chain.catch(function (e) {
+    // 内容还回输入框/附件区，别让一次网络抖动吃掉用户写的东西。
+    // 已经发出去的不补回，否则用户重试会把它们再发一遍。
+    restoreDraft(sentCount ? '' : text, atts.slice(sentCount));
+    toast('发送失败（未发出的内容已保留）：' + (e.message || e), 'err');
+  });
 }
 $('#bSend').onclick = doSend;
 $('#input').addEventListener('keydown', function (e) {
+  // ⚠️ 中文输入法（IME）保护：用拼音打字时按回车是「确认候选词」，
+  //    此时浏览器同样会派发 keydown(Enter)。原来没有这道判断，用户敲
+  //    「nihao」→ 回车上字，结果半截拼音/半成品句子直接被当成消息发了出去。
+  //    isComposing 是标准字段；keyCode 229 是老旧浏览器/部分安卓输入法的等价信号。
+  if (e.isComposing || e.keyCode === 229) return;
   // @ 成员列表优先：打开时 ↑↓ 选择、Enter=确认艾特（绝不发送）、Esc 关闭
   var apop = $('#mpop');
   if (!apop.classList.contains('hidden') && S.atList && S.atList.length) {
@@ -2977,6 +3074,12 @@ window.LT = {
   myConvList: function () { return myConvList(); },
   myConvs: function () { return S.myConvs; },
   onNew: function (m) { return onNew(m); },
+  // 供测试断言附件队列 / 导入导出 / 主题切换（这几个流程只能从内部函数进入）
+  addAttach: function (f) { return addAttach(f); },
+  clearAttach: function () { return clearAttach(); },
+  doExport: function (c) { return doExport(c); },
+  doImport: function (p) { return doImport(p); },
+  toggleTheme: function () { return toggleTheme(); },
 };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
 // 启动后探测意图路由能力（服务端未配置密钥时保持关闭，行为与之前完全一致）
@@ -3954,10 +4057,12 @@ function openRoom(id) {
     document.body.appendChild(el);
   }
   el.classList.remove('hidden');
+  S.xqSel = null;        // 换局即清选中态（见 S.xqSel 说明）：旧坐标对新棋盘无意义
   renderRoom();
 }
 function closeRoom() {
   S.gameOpen = null;
+  S.xqSel = null;
   var el = $('#groom'); if (el) el.classList.add('hidden');
   stopLeaveCountdown();
   renderMsgs();
@@ -4366,7 +4471,14 @@ function toggleTheme() {
   applyTheme();
   closePops();
 }
-function applyTheme() { document.body.className = 'theme-' + S.theme; }
+function applyTheme() {
+  // ⚠️ 不能直接 document.body.className = 'theme-x'：body 上还挂着 unread-glow
+  //   （未读红闪，由 tick / visibilitychange 维护）。整体赋值会把红闪类一起抹掉，
+  //   表现就是「切一下主题，未读红闪没了」，要等下一轮轮询才自己回来。
+  var b = document.body;
+  b.classList.remove('theme-dark', 'theme-light');
+  b.classList.add('theme-' + S.theme);
+}
 function doExit() {
   closePops();
   confirmBox('确定退出登录？', function () { CLOUD.auth.signOut().then(function () { location.reload(); }); });

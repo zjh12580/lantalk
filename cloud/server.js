@@ -287,6 +287,42 @@ function cacheSet(k, v) {
   cache.set(k, { t: Date.now(), v: v });
 }
 
+/* ---------- 最小速率限制 ----------
+ * 三个计费接口（/api/intent、/api/chat、/api/analyze）都是**无鉴权**的 POST，
+ * 且每次未命中缓存都会真实消耗上游 LLM 额度。缓存只挡「完全相同」的重复请求，
+ * 换几个字就能绕过 —— 任何人写个 for 循环打这个端口就能烧光配额。
+ * 这里按来源 IP 做滑动窗口限流（进程内内存态，够挡住误用和简单脚本；
+ * 真要对抗分布式攻击应放到网关层）。上限可用环境变量覆盖。
+ */
+const RATE = {
+  '/api/intent': { limit: envInt('RATE_INTENT', 60), win: 60000 },
+  '/api/chat': { limit: envInt('RATE_CHAT', 30), win: 60000 },
+  '/api/analyze': { limit: envInt('RATE_ANALYZE', 20), win: 60000 },
+};
+function envInt(name, dflt) { const n = Number(process.env[name]); return Number.isFinite(n) && n > 0 ? n : dflt; }
+const RATE_MAX_KEYS = 5000;          // 防止用海量伪造 IP 撑爆内存
+const rateBuckets = new Map();
+/** 记一次请求；超限返回 {retryAfter: 秒}，未超限返回 null */
+function rateHit(pathname, ip) {
+  const cfg = RATE[pathname]; if (!cfg) return null;
+  const k = pathname + '|' + ip;
+  const now = Date.now();
+  let arr = rateBuckets.get(k);
+  if (!arr) {
+    arr = []; rateBuckets.set(k, arr);
+    if (rateBuckets.size > RATE_MAX_KEYS) rateBuckets.delete(rateBuckets.keys().next().value);
+  }
+  while (arr.length && now - arr[0] > cfg.win) arr.shift();
+  if (arr.length >= cfg.limit) return { retryAfter: Math.max(1, Math.ceil((cfg.win - (now - arr[0])) / 1000)) };
+  arr.push(now);
+  return null;
+}
+/** 部署在反向代理后面时 socket 拿到的是代理 IP，优先取 X-Forwarded-For 首跳 */
+function clientIp(req) {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
 async function callTypeSafe(text, context) {
   const state = {
     recent_messages: Array.isArray(context) ? context.slice(-4) : [],
@@ -344,6 +380,15 @@ function shapeAnswer(j) {
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(body);
+}
+function sendTooMany(res, sec) {
+  const body = JSON.stringify({ ok: false, reason: 'rate_limited', retry_after: sec });
+  res.writeHead(429, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Retry-After': String(sec),
+    'Cache-Control': 'no-store',
+  });
   res.end(body);
 }
 
@@ -546,6 +591,9 @@ const server = http.createServer(async (req, res) => {
     const ck = text + '|' + (payload.context || []).slice(-2).join('~');
     const hit = cacheGet(ck);
     if (hit) return send(res, 200, Object.assign({ cached: true }, hit));
+    // 只有真正要打上游（缓存未命中）的请求才计入限流
+    const rl = rateHit('/api/intent', clientIp(req));
+    if (rl) return sendTooMany(res, rl.retryAfter);
     try {
       const raw = await callTypeSafe(text, payload.context);
       const out = shapeAnswer(raw);
@@ -580,6 +628,8 @@ const server = http.createServer(async (req, res) => {
     const ck = 'ch:' + text + '|' + String(payload.who || '') + '|' + (payload.history || []).slice(-4).map((m) => String(m.content || '').slice(0, 80)).join('~');
     const hit = cacheGet(ck);
     if (hit) return send(res, 200, Object.assign({ cached: true }, hit));
+    const rl = rateHit('/api/chat', clientIp(req));
+    if (rl) return sendTooMany(res, rl.retryAfter);
     try {
       const out = await AGENT.runAgent({ chat: makeChatFn(true) }, {
         text,
@@ -621,16 +671,20 @@ const server = http.createServer(async (req, res) => {
     const ck = 'an:' + JSON.stringify(state);
     const hit = cacheGet(ck);
     if (hit) return send(res, 200, Object.assign({ cached: true }, hit));
+    const rl = rateHit('/api/analyze', clientIp(req));
+    if (rl) return sendTooMany(res, rl.retryAfter);
+    // ⚠️ 定时器必须在 finally 里清：原来只在 fetch 成功后 clearTimeout，
+    //    一旦 fetch 抛错（8s 超时被 abort / 网络抖动）就直接进 catch 返回，
+    //    8 秒的定时器还会挂在事件循环上，每失败一次漏一个。
+    const ac = new AbortController();
+    const timer = setTimeout(function () { ac.abort(); }, 8000);
     try {
-      const ac = new AbortController();
-      const timer = setTimeout(function () { ac.abort(); }, 8000);
       const r = await fetch(BASE_URL + '/v1/systemone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + API_KEY },
         body: JSON.stringify({ state: state, model: MODEL, questions: ANALYZE_QUESTIONS }),
         signal: ac.signal,
       });
-      clearTimeout(timer);
       if (!r.ok) {
         const body = await r.text().catch(function () { return ''; });
         return send(res, 200, { ok: false, reason: 'upstream', detail: String(body).slice(0, 200) });
@@ -642,6 +696,8 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.warn('[analyze]', e.message);
       return send(res, 200, { ok: false, reason: 'upstream', detail: String(e.message || e).slice(0, 200) });
+    } finally {
+      clearTimeout(timer);
     }
   }
 

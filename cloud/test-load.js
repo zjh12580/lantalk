@@ -2192,6 +2192,119 @@ function makeStub() {
       '隔离：旧的「cm() 查不到即非我会话」判据已移除');
   }
 
+  // =========================================================================
+  // QA 回归锁：这一批是「高级测试工程师走查」发现并修掉的缺陷，
+  // 每条都钉住修复后的行为/写法，防止日后改回去。
+  // =========================================================================
+  {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const IJS = fsx.readFileSync(pathx.join(__dirname, 'index.html'), 'utf8');
+
+    console.log('\n===== QA 回归锁 =====\n');
+
+    // ① @我 侧栏高亮：标记必须挂在 S.atMe 上并由 buildConvs 回填
+    log(/atMe:\s*\{\}/.test(IJS), '回归·@我：S 上声明了 atMe 容器（标记不能挂在会话对象上）');
+    log(/list\.forEach\(function \(c\) \{ c\.atMe = !!S\.atMe\[c\.conv\]; \}\)/.test(IJS),
+      '回归·@我：buildConvs 末尾按 S.atMe 回填（buildConvs 整体重建 S.convs，挂对象上的标记会丢）');
+    log(/S\.atMe\[m\.conv\] = 1;/.test(IJS), '回归·@我：onNew 写的是 S.atMe 而不是会话对象');
+    log(/delete S\.atMe\[conv\];/.test(IJS), '回归·@我：openConv 清除该会话的 @ 提醒');
+
+    // ② 行情卡片：cny 接口空返回不能崩
+    log(/var cnyPrice = cny && cny\.current_price;/.test(IJS),
+      '回归·行情卡：cny 取不到时不再直接读 current_price（原来会抛 TypeError 渲染成错误卡）');
+    log(IJS.indexOf('cny.current_price) + \'  /  $\'') < 0,
+      '回归·行情卡：不再有无保护的 cny.current_price 解引用');
+
+    // ③ 象棋选中态：openRoom / closeRoom 必须清 xqSel
+    log(/xqSel:\s*null/.test(IJS), '回归·象棋：S 上显式声明 xqSel');
+    const openRoomBody = (IJS.match(/function openRoom\(id\) \{[\s\S]{0,600}?\n\}/) || [''])[0];
+    log(openRoomBody.indexOf('S.xqSel = null') >= 0, '回归·象棋：openRoom 清空选中态（换局不带旧坐标）');
+    const closeRoomBody = (IJS.match(/function closeRoom\(\) \{[\s\S]{0,400}?\n\}/) || [''])[0];
+    log(closeRoomBody.indexOf('S.xqSel = null') >= 0, '回归·象棋：closeRoom 清空选中态');
+
+    // ④ 发送失败：sendMsg 不能吞掉异常，doSend 要兜底还内容
+    log(!/return m;\s*\}\)\.catch\(function \(e\) \{ toast\('发送失败/.test(IJS),
+      '回归·发送：sendMsg 不再内部吞掉异常（否则调用方的失败兜底永远不触发）');
+    log(/restoreDraft\(sentCount \? '' : text, atts\.slice\(sentCount\)\)/.test(IJS),
+      '回归·发送：失败时把「未发出」的内容还回输入框/附件区');
+    log(/function restoreDraft\(text, atts\)/.test(IJS), '回归·发送：提供了 restoreDraft 兜底函数');
+
+    // ⑤ 主题切换不能整体覆写 body.className（会抹掉 unread-glow）
+    log(IJS.indexOf("document.body.className = 'theme-'") < 0,
+      '回归·主题：不再整体赋值 body.className');
+    const themeBody = (IJS.match(/function applyTheme\(\) \{[\s\S]{0,400}?\n\}/) || [''])[0];
+    log(themeBody.indexOf("classList.remove('theme-dark', 'theme-light')") >= 0,
+      '回归·主题：改用 classList 增删，保留 body 上其它类（unread-glow）');
+
+    // ⑥ parse60s 里那段恒等废话（已改为 d.date || ''）
+    log(!/d\.date \|\| \(d\.date/.test(IJS), '回归·清理：parse60s 去掉恒等废话写法');
+
+    // ⑦ 复制：navigator.clipboard 在非安全上下文是 undefined，必须有降级路径
+    log(IJS.indexOf('navigator.clipboard.writeText(m.text') < 0,
+      '回归·复制：不再直接解引用 navigator.clipboard（http 内网访问时为 undefined，会抛 TypeError）');
+    log(/function copyText\(s\)/.test(IJS) && /function legacyCopy\(str\)/.test(IJS),
+      '回归·复制：提供 copyText + execCommand 兜底');
+
+    // ⑧ 中文输入法回车保护（IME 上字时不能误发消息）
+    const imeGuards = IJS.match(/e\.isComposing \|\| e\.keyCode === 229/g) || [];
+    log(imeGuards.length >= 2, '回归·IME：输入框与昵称页都挡住了输入法回车误发送', 'guards=' + imeGuards.length);
+    log(/if \(e\.isComposing \|\| e\.keyCode === 229\) return;/.test(IJS),
+      '回归·IME：#input 的 keydown 首行即拦截合成态回车');
+
+    // ---- 服务端的回归锁 ----
+    const SJS = fsx.readFileSync(pathx.join(__dirname, 'server.js'), 'utf8');
+    // /api/analyze 的 abort 定时器必须进 finally（原来只在成功路径清，失败一次漏一个）
+    {
+      const at = SJS.indexOf("'/api/analyze' && req.method === 'POST'");
+      const body = at >= 0 ? SJS.slice(at, at + 2600) : '';
+      const fIdx = body.indexOf('} finally {');
+      const cIdx = body.indexOf('clearTimeout(timer)');
+      log(at >= 0 && fIdx > 0 && cIdx > fIdx,
+        '回归·服务端：/api/analyze 的超时定时器进 finally（失败路径不再泄漏）',
+        'at=' + at + ' finally=' + fIdx + ' clear=' + cIdx);
+      log(SJS.indexOf('const r = await fetch(BASE_URL') < 0 || SJS.indexOf('clearTimeout(timer);\n      if (!r.ok)') < 0,
+        '回归·服务端：不再「只在 fetch 成功后 clearTimeout」');
+    }
+    // 计费接口必须有速率限制
+    log(/'\/api\/intent':\s*\{ limit:/.test(SJS) && /'\/api\/chat':\s*\{ limit:/.test(SJS) && /'\/api\/analyze':\s*\{ limit:/.test(SJS),
+      '回归·服务端：三个计费接口都配了速率上限');
+    log(/function rateHit\(pathname, ip\)/.test(SJS) && /function sendTooMany\(res, sec\)/.test(SJS),
+      '回归·服务端：实现了按来源 IP 的滑动窗口限流与 429 响应');
+    ['/api/intent', '/api/chat', '/api/analyze'].forEach((p) => {
+      log(SJS.indexOf("rateHit('" + p + "', clientIp(req))") >= 0, '回归·服务端：' + p + ' 接入了限流');
+    });
+  }
+
+  // ---- 行为级回归：这几个缺陷必须真的跑一遍，源码匹配挡不住逻辑回退 ----
+  if (w.LT) {
+    const LT2 = w.LT, S2 = LT2.S;
+
+    // @我：onNew 之后会话对象上必须带着 atMe（buildConvs 重建后仍在）
+    {
+      const savedCur = S2.cur;
+      const cv = 'g:hall';
+      S2.cur = 'g:xx-none';   // 切走，避免当会话被立刻已读
+      S2.atMe = S2.atMe || {};
+      LT2.onNew({ id: 880001, conv: cv, sender_id: 'u_a', sender_name: '甲', type: 'text', text: '@我一下', mentions: ['u_test'], created_at: new Date().toISOString() });
+      const c = LT2.cm()[cv];
+      log(!!c && c.atMe === true, '回归·@我：onNew → 会话对象带 atMe（经 buildConvs 重建仍在）', c ? String(c.atMe) : 'no conv');
+      delete S2.atMe[cv];
+      S2.cur = savedCur;
+      LT2.S.unread[cv] = 0;
+    }
+
+    // 象棋：换局后选中态必须被清掉
+    {
+      S2.xqSel = [3, 0];
+      LT2.openRoom('gm_regress_xq');
+      log(S2.xqSel === null, '回归·象棋：openRoom 后 xqSel 被清空', JSON.stringify(S2.xqSel));
+      // 清场：别把这局残留在状态里影响后续用例
+      S2.gameOpen = null;
+      const gr = D.querySelector('#groom'); if (gr) gr.classList.add('hidden');
+    }
+  }
+
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
   console.log('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败\n');
   w.close();
