@@ -103,7 +103,7 @@ PORT=9000 npm start
 
 ## 六、数据库
 
-建表与 RLS 的完整 DDL 见 `cloud/schema.sql`（6 张业务表 + `games`/`live`，含全部 RLS 策略与两个 `SECURITY DEFINER` 鉴权函数）。
+建表与 RLS 的完整 DDL 见 `cloud/schema.sql`（7 张业务表，含全部 RLS 策略与两个 `SECURITY DEFINER` 鉴权函数）。
 
 新环境部署时**先执行 schema.sql**，再起服务。
 

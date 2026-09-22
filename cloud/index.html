@@ -262,36 +262,6 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .isec .row:last-child{border-bottom:none}
 .isec .row:first-of-type{border-top:1px solid var(--bd)}
 .info .btn.block{margin-top:14px}
-/* 资料页直播区块 */
-.lrow{display:flex;align-items:center;gap:8px;font-size:13px;padding:4px 0 10px;color:var(--tx2)}
-.lrow .ldot{width:8px;height:8px;border-radius:50%;background:#ff4d4f;flex-shrink:0;animation:livepulse 1.4s infinite}
-.lhint{font-size:11.5px;color:var(--tx3);line-height:1.6;margin-top:8px}
-/* 大厅直播：公告下方的提示条 */
-.livebar{display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:13px;cursor:pointer;
-  background:linear-gradient(90deg,rgba(229,57,53,.16),rgba(229,57,53,.05));color:#ff6b6b;
-  border-bottom:1px solid var(--bd);transition:background .15s}
-.livebar:hover{background:linear-gradient(90deg,rgba(229,57,53,.26),rgba(229,57,53,.08))}
-.livebar .lb-arw{margin-left:auto;opacity:.7}
-.livebar .lbd{width:7px;height:7px;border-radius:50%;background:#ff4d4f;flex-shrink:0;animation:livepulse 1.4s infinite}
-@keyframes livepulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(255,77,79,.55)}50%{opacity:.65;box-shadow:0 0 0 5px rgba(255,77,79,0)}}
-/* 全屏直播间 */
-.live{position:fixed;inset:0;background:#0b0b0d;z-index:120;display:flex;flex-direction:column;color:#f2f3f5}
-.lv-top{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.08)}
-.lv-tag{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#fff;background:#e53935;padding:3px 10px;border-radius:20px;flex-shrink:0}
-.lv-tag .lvd{width:6px;height:6px;border-radius:50%;background:#fff;animation:livepulse 1.4s infinite}
-.lv-host{display:flex;align-items:center;gap:8px;min-width:0;flex:1;font-size:14px}
-.lv-host .av{width:28px;height:28px;font-size:14px;border-radius:7px;flex-shrink:0}
-.lv-host span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lv-top .ib{color:#f2f3f5;background:rgba(255,255,255,.08)}
-.lv-top .ib:hover{background:rgba(255,255,255,.16)}
-.lv-stage{flex:1;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;padding:16px}
-.lv-ph{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;color:#8b8f98}
-.lv-ph .ricon{width:92px;height:92px;border-radius:50%;background:linear-gradient(135deg,#e53935,#ff7043);display:flex;align-items:center;justify-content:center;font-size:42px;box-shadow:0 10px 34px rgba(229,57,53,.35);animation:livepulse 1.8s infinite}
-.lv-ph .pt{font-size:15px;color:#d5d8dd}
-.lv-ph .ps{font-size:12.5px;max-width:340px;line-height:1.7}
-.lv-video{width:100%;max-width:1000px;aspect-ratio:16/9;background:#000;border-radius:12px;object-fit:contain}
-.lv-bottom{display:flex;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid rgba(255,255,255,.08)}
-.lv-cnt{font-size:12.5px;color:#8b8f98;margin-right:auto}
 
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200}
 .modal{background:var(--bg2);border-radius:14px;width:420px;max-width:92vw;max-height:84vh;overflow-y:auto;padding:22px;box-shadow:var(--sd)}
@@ -352,7 +322,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .groom .gr-pl .dot{width:7px;height:7px;border-radius:50%;background:var(--tx3);flex:0 0 auto}
 .groom .gr-pl.on .dot{background:var(--brand);animation:grpulse 1.4s infinite}
 /* 玩家条「轮到谁」指示点的呼吸动画：只做透明度，绝不能用 box-shadow 扩散 ——
-   livepulse 是给直播红点设计的，带 5px 红色光环，贴在玩家条里会被 overflow 裁成一条脏弧线。 */
+   带 box-shadow 光环的动画贴在玩家条里会被 overflow 裁成一条脏弧线。 */
 @keyframes grpulse{0%,100%{opacity:1}50%{opacity:.35}}
 /* 左侧的「对局状态」提示条：同样无底色无框，只留文字；宽度贴合内容 */
 .groom .gr-status{width:fit-content;max-width:100%;padding:6px 12px;border-radius:100px;
@@ -654,7 +624,6 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
         </div>
       </div>
       <div class="ann hidden" id="annBar"></div>
-      <div class="livebar hidden" id="liveBar"></div>
       <div class="msgs" id="mList"></div>
       <div class="compwrap">
       <div class="typ hidden" id="typBar"></div>
@@ -688,18 +657,6 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
   <img id="viewerImg" alt="">
   <button class="ib" id="viewerDl" title="下载原图">⬇</button>
   <button class="ib" id="viewerClose" title="关闭">✕</button>
-</div>
-<div class="live hidden" id="live">
-  <div class="lv-top">
-    <div class="lv-tag"><span class="lvd"></span>直播中</div>
-    <div class="lv-host" id="lvHost"></div>
-    <button class="ib" id="lvClose" title="离开">✕</button>
-  </div>
-  <div class="lv-stage" id="lvStage"></div>
-  <div class="lv-bottom">
-    <span class="lv-cnt" id="lvCnt">0 人在看</span>
-    <button class="btn primary" id="lvAct">开启直播</button>
-  </div>
 </div>
 <div class="toasts" id="toasts"></div>
 <input type="file" id="fImg" accept="image/*" class="hidden">
@@ -759,9 +716,6 @@ var S = {
   botTyping: null,
   botMenuAt: {},         // 会话 -> 最近一次展示技能菜单的时间（5 分钟内可直选序号）
   botBackup: {},         // 小美回复兜底定时器（leader 未回时补发）
-  live: null,            // 当前大厅直播记录（null 表示无人直播）
-  liveOpen: false,       // 直播间浮层是否打开
-  liveBusy: false,       // 直播操作进行中（防重复点击）
   games: {},             // gameId -> 游戏记录（轮询同步）
   gameOpen: null,        // 当前打开的 gameId（null 表示未在对局浮层）
   gameBusy: false,       // 对局操作进行中（防重复落子）
@@ -1975,106 +1929,6 @@ function bindGlobalResize() {
 }
 
 // ---------- 数据加载 ----------
-// ---------- 大厅直播 ----------
-// 拉取当前直播状态（唯一一条 status=live 的记录）；无则降级为 null
-function liveSync() {
-  return q(db.from('live').select('*').eq('status', 'live').limit(1)).then(function (rows) {
-    applyLive(rows && rows.length ? rows[0] : null);
-  }).catch(function () { /* 表可能尚未就绪，静默 */ });
-}
-// 是否正处在大厅会话（大厅 conv 键为 'g:hall'，兼容历史 'hall'）
-function isHallCur() {
-  if (!S.cur) return false;
-  var c = cm()[S.cur];
-  return !!(c && c.isHall) || S.cur === 'hall' || S.cur === 'g:hall';
-}
-function applyLive(row) {
-  var prevId = S.live ? S.live.id : null;
-  S.live = row || null;
-  if (isHallCur()) {
-    // 公告下那行提示
-    var bar = $('#liveBar');
-    if (bar) {
-      if (S.live) { bar.classList.remove('hidden'); bar.innerHTML = '<span class="lbd"></span>大厅直播中，点击进入~<span class="lb-arw">›</span>'; }
-      else bar.classList.add('hidden');
-    }
-    if (S.info) renderInfo();   // 资料页的按钮态同步（有人播时其他人不可再开）
-  }
-  // 直播结束了（或主播换了）但浮层还开着：给出提示并关闭
-  if (S.liveOpen && (!S.live || (prevId != null && S.live.id !== prevId))) {
-    if (!S.live) { toast('直播已结束'); closeLive(); }
-    else { renderLiveStage(); }
-  } else if (S.liveOpen && S.live) {
-    renderLiveStage();
-  }
-}
-function liveIsMine() { return !!(S.live && S.live.host_id === S.uid); }
-function openLive() {
-  if (!S.live) { toast('当前没有直播', 'err'); return; }
-  S.liveOpen = true;
-  $('#live').classList.remove('hidden');
-  $('#lvHost').textContent = (S.live.host_name || '主持人') + (liveIsMine() ? '（你）' : '') + ' 正在直播';
-  $('#lvAct').textContent = liveIsMine() ? '结束直播' : '离开';
-  $('#lvAct').className = 'btn ' + (liveIsMine() ? 'danger' : 'ghost');
-  $('#lvCnt').textContent = (S.live.viewers || 0) + ' 人在看';
-  renderLiveStage();
-  liveSeen(S.live.id);
-}
-function closeLive() {
-  S.liveOpen = false;
-  $('#live').classList.add('hidden');
-}
-// 骨架阶段：视频区域用占位符。后续接入真实推流时替换为 <video>/WebRTC。
-function renderLiveStage() {
-  var st = $('#lvStage');
-  if (!st) return;
-  if (!S.live) { st.innerHTML = '<div class="lv-ph"><div class="ricon">📴</div><div class="pt">直播已结束</div><div class="ps">感谢观看～</div></div>'; return; }
-  st.innerHTML = '<div class="lv-ph"><div class="ricon">' + (S.live.host_avatar && S.live.host_avatar.length <= 4 ? esc(S.live.host_avatar) : '🎥') + '</div>'
-    + '<div class="pt">' + esc(S.live.title || (S.live.host_name || '主持人') + ' 的直播') + '</div>'
-    + '<div class="ps">视频画面接入中… 先占个座 🎬</div></div>';
-}
-function startLive() {
-  if (S.liveBusy) return;
-  if (S.live) { toast(liveIsMine() ? '你已经在直播中' : '当前已有其他人在直播', 'err'); return; }
-  S.liveBusy = true;
-  var me = S.me || {};
-  q(db.from('live').insert({
-    host_id: S.uid, host_name: me.nickname || '', host_avatar: me.avatar || '',
-    host_color: me.color || '#888', title: (me.nickname || '主播') + ' 的直播', status: 'live',
-  })).then(function () {
-    return liveSync();
-  }).then(function () {
-    S.liveBusy = false;
-    if (S.live && liveIsMine()) { toast('直播已开启 🎬'); openLive(); }
-    else { toast('开启失败：已有其他人在直播', 'err'); liveSync(); }
-    if (S.info) renderInfo();
-  }).catch(function (e) {
-    S.liveBusy = false;
-    // 唯一索引冲突（23505）= 恰好有人抢先开了
-    var msg = String(e.message || e);
-    toast(e.code === '23505' || /duplicate|unique/i.test(msg) ? '慢了一步，已有其他人在直播' : '开启失败：' + msg, 'err');
-    liveSync();
-    if (S.info) renderInfo();
-  });
-}
-function stopLive() {
-  if (!S.live || !liveIsMine() || S.liveBusy) return;
-  S.liveBusy = true;
-  q(db.from('live').delete().eq('id', S.live.id).eq('host_id', S.uid)).then(function () {
-    S.liveBusy = false;
-    closeLive();
-    applyLive(null);
-    toast('直播已结束');
-    if (S.info) renderInfo();
-  }).catch(function (e) { S.liveBusy = false; toast('结束失败：' + (e.message || e), 'err'); });
-}
-// 观众数心跳（仅主播上报，幂等写 viewers；失败忽略）
-// 骨架阶段：暂不维护 viewers（观众数由房间信息里的只读字段展示），因此这里是空实现。
-// 保留函数是为了让 onLive / 房间逻辑保持「想上报就调一下」的形状，将来接 viewers 不必改调用点。
-function liveSeen(_id) {
-  if (!S.live) return;
-}
-
 function refreshAll() {
   return Promise.all([
     q(db.from('profiles').select('*')),
@@ -2105,7 +1959,6 @@ function refreshAll() {
     renderConvs();
     if (S.info) renderInfo();
     updateOnline();
-    return liveSync();
   });
 }
 // 已读记录：reads 表里每人每会话一条
@@ -2332,7 +2185,6 @@ function tick() {
     q(db.from('messages').select('*').in('conv', scope).gt('id', S.lastId).order('id', { ascending: true }).limit(200)),
     q(db.from('friends').select('*')),
     q(db.from('profiles').select('*')),   // 每轮都拉（表很小）：「正在输入」状态 2.5 秒内可见
-    q(db.from('live').select('*').eq('status', 'live').limit(1)),
     q(db.from('games').select('*')),      // 每轮都拉（表很小）：游戏状态 2.5 秒内同步
   ];
   if (heavy) jobs.push(q(db.from('group_members').select('*')), q(db.from('groups').select('*')), q(db.from('reads').select('*')));
@@ -2341,13 +2193,12 @@ function tick() {
     syncFriends(r[1]);
     S.profiles = {}; r[2].forEach(function (p) { S.profiles[p.id] = p; });
     ensureBot();   // 小美不在真实 profiles 表里，profiles 每轮重建后都要补回，否则 light 轮询会把她洗掉
-    applyLive(r[3] && r[3].length ? r[3][0] : null);
-    applyGames(r[4]);
+    applyGames(r[3]);
     if (heavy) {
       S.members = {}; S.myMuted = {};
-      r[5].forEach(function (m) { (S.members[m.group_id] = S.members[m.group_id] || []).push(m.user_id); if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
-      S.groups = r[6];
-      applyReads(r[7]);
+      r[4].forEach(function (m) { (S.members[m.group_id] = S.members[m.group_id] || []).push(m.user_id); if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
+      S.groups = r[5];
+      applyReads(r[6]);
       // 关系数据刚更新 → 立刻重建白名单，让本轮与下一轮的 scope 都是最新的
       rebuildMyConvs();
     }
@@ -2594,12 +2445,6 @@ function openConv(conv) {
   $('#cSub').textContent = c.type === 'group' ? c.memberCount + ' 位成员' : (onlineOf(c.id) ? '在线' : '离线');
   if (c.type === 'group' && c.announcement) { $('#annBar').classList.remove('hidden'); $('#annBar').textContent = '📢 ' + c.announcement; }
   else $('#annBar').classList.add('hidden');
-  // 大厅直播提示行（仅大厅且有人直播时显示）
-  var lb = $('#liveBar');
-  if (lb) {
-    if (c.type === 'group' && c.isHall && S.live) { lb.classList.remove('hidden'); lb.innerHTML = '<span class="lbd"></span>大厅直播中，点击进入~<span class="lb-arw">›</span>'; }
-    else lb.classList.add('hidden');
-  }
   S.unread[conv] = 0;
   c.atMe = false;
   renderConvs();
@@ -3718,22 +3563,6 @@ $('#bInfo').onclick = function () {
   $('#info').classList.toggle('hidden', !S.info);
   if (S.info) renderInfo();
 };
-// 大厅资料页的「直播」区块：无人直播→开启直播；我直播→返回直播间/结束；他人直播→仅可进入
-function liveEntryHtml() {
-  if (S.live) {
-    var mine = liveIsMine();
-    var who = mine ? '直播中（你）' : ((S.live.host_name || '有人') + ' 正在直播');
-    return '<div class="isec"><div class="lbl">大厅直播</div>'
-      + '<div class="lrow"><span class="ldot"></span>' + esc(who) + '</div>'
-      + '<button class="btn primary block" id="liveGo">' + (mine ? '回到我的直播间' : '进入直播间') + '</button>'
-      + (mine ? '<button class="btn danger block" id="liveStop" style="margin-top:8px">结束直播</button>' : '')
-      + '</div>';
-  }
-  return '<div class="isec"><div class="lbl">大厅直播</div>'
-    + '<button class="btn primary block" id="liveGo">🎬 开启直播</button>'
-    + '<div class="lhint">同一时刻仅一人可直播，进入后其他成员可围观。</div>'
-    + '</div>';
-}
 function renderInfo() {
   var c = cm()[S.cur];
   if (!c) return;
@@ -3755,7 +3584,6 @@ function renderInfo() {
       + (isOwner ? '<div class="row"><span>群名称</span><button class="btn ghost" id="rnBtn" style="padding:4px 12px;font-size:12px">修改</button></div>' : '')
       + (isOwner ? '<div class="row"><span>群公告</span><button class="btn ghost" id="anBtn" style="padding:4px 12px;font-size:12px">编辑</button></div>' : '')
       + '</div>'
-      + (g.is_hall ? liveEntryHtml() : '')
       + (g.is_hall ? '' : '<button class="btn ' + (isOwner ? 'danger' : 'ghost') + ' block" id="lvBtn">' + (isOwner ? '解散群聊' : '退出群聊') + '</button>');
     $$('#info .mem').forEach(function (m) {
       m.onclick = function () { if (m.dataset.u !== S.uid) openConv(pconv(S.uid, m.dataset.u)); };
@@ -3783,10 +3611,6 @@ function renderInfo() {
           .catch(function (e) { toast('操作失败：' + (e.message || e), 'err'); });
       });
     };
-    if ($('#liveGo')) $('#liveGo').onclick = function () {
-      if (S.live) { openLive(); } else { startLive(); }
-    };
-    if ($('#liveStop')) $('#liveStop').onclick = function () { confirmBox('确定结束当前直播？', stopLive); };
   } else {
     var p = S.profiles[c.id] || {};
     var rel = friendRel(c.id);
@@ -5445,15 +5269,6 @@ if (sideBtn) sideBtn.onclick = function () {
 };
 var sideMask = $('#sideMask');
 if (sideMask) sideMask.onclick = closeSide;
-
-// 大厅直播：提示条点击进入 / 直播间按钮
-var liveBarEl = $('#liveBar');
-if (liveBarEl) liveBarEl.onclick = function () { if (S.live) openLive(); else toast('直播已结束'); };
-if ($('#lvClose')) $('#lvClose').onclick = closeLive;
-if ($('#lvAct')) $('#lvAct').onclick = function () {
-  if (liveIsMine()) { confirmBox('确定结束当前直播？', stopLive); }
-  else { closeLive(); }
-};
 
 // ---------- 初始化 ----------
 try { S.theme = localStorage.getItem('lt_theme') || 'dark'; } catch (e) { S.theme = 'dark'; }
