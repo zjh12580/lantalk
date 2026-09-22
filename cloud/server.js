@@ -418,6 +418,63 @@ function makeChatFn(preferStream) {
   };
 }
 
+/* ---------------------------------------------------------------------------
+ * 聊天洞察「回复建议」：用聊天模型（DeepSeek 主通道 / 云端 Keyless 网关回退）
+ * 针对真实聊天记录生成 3 条可直接发送的话术，而不是写死模板。
+ * -------------------------------------------------------------------------*/
+const SUGGEST_SYS = '你是一个聊天助手里的「回复建议」生成器。用户给你一段两人对话（我方 / 对方）。'
+  + '请结合对话语境、对方最近的情绪和意图，生成 3 条自然、得体、可直接发送的中文回复。'
+  + '规则：每条是独立的一句话，像真人会发的，不要带序号、项目符号或引号包裹；'
+  + '3 条风格要有差异（例如：接住对方话题继续聊 / 抛一个轻松的问题引导对方多说 / 表达共鸣或关心）；'
+  + '不要重复对方的话，不要说教，不要过度热情，保持日常聊天的分寸。'
+  + '只输出一个 JSON 数组，例如 ["话术1","话术2","话术3"]，不要任何额外说明或 markdown 代码块。';
+
+function formatForSuggest(msgs) {
+  return (msgs || []).map(function (m) {
+    const who = m.sender === 'self' ? '我方' : (m.sender === 'other' ? '对方' : '未知');
+    return who + '：' + String(m.text || '');
+  }).join('\n');
+}
+
+function extractJsonArray(text) {
+  if (!text) return null;
+  let t = String(text).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const s = t.indexOf('['); const e = t.lastIndexOf(']');
+  if (s >= 0 && e > s) t = t.slice(s, e + 1);
+  try { const v = JSON.parse(t); if (Array.isArray(v)) return v; } catch (_) {}
+  // 退化：按行提取，过滤序号/标点/引号、引导语（含冒号）与否定表述
+  const neg = /(没有|无法|抱歉|暂不支持|不能|无可)/;
+  const lines = t.split(/\r?\n/).map(function (x) {
+    return x.replace(/^[\s\d.、）)[\]】"'`*+\-]+/, '').replace(/["'`*]+$/, '').trim();
+  }).filter(function (x) {
+    return x.length >= 2 && x.indexOf('：') < 0 && x.indexOf(':') < 0 && !neg.test(x);
+  }).slice(0, 3);
+  return lines.length ? lines : null;
+}
+
+async function generatePlans(msgs, analysis) {
+  // 没有可用的聊天通道（DeepSeek / 云端网关）时返回 null → 前端隐藏建议区
+  if (!DS_KEY && !(GW_BASE && GW_KEY)) return null;
+  if (!Array.isArray(msgs) || !msgs.length) return [];
+  const mood = analysis && analysis.mood && analysis.mood.choice;
+  const intent = analysis && analysis.intent && analysis.intent.choice;
+  const userPrompt = '对话记录：\n' + formatForSuggest(msgs)
+    + '\n\n（补充上下文：对方当前情绪倾向「' + (mood || '未知') + '」，最近意图倾向「' + (intent || '未知') + '」）\n请生成 3 条回复建议。';
+  const messages = [
+    { role: 'system', content: SUGGEST_SYS },
+    { role: 'user', content: userPrompt },
+  ];
+  try {
+    const chat = makeChatFn(false);
+    const r = await chat({ messages: messages, disableTools: true });
+    const arr = extractJsonArray((r && r.content) || '');
+    return (Array.isArray(arr) ? arr : []).map(function (s) { return String(s).trim(); }).filter(Boolean).slice(0, 3);
+  } catch (e) {
+    console.warn('[suggest]', e.message);
+    return [];
+  }
+}
+
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     let n = 0; const chunks = [];
@@ -536,6 +593,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: false, reason: 'upstream', detail: String(body).slice(0, 200) });
       }
       const out = shapeAnalyze(await r.json());
+      out.plans = await generatePlans(msgs, out);
       cacheSet(ck, out);
       return send(res, 200, out);
     } catch (e) {

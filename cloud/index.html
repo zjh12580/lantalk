@@ -510,6 +510,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .card .pt{flex:1;min-width:0;font-size:12.5px;line-height:1.5;color:var(--tx);word-break:break-word}
 .card .pfill{flex:0 0 auto;align-self:center;font-size:11px;line-height:1.6;color:var(--brand);border:1px solid var(--brand);border-radius:999px;padding:0 8px;white-space:nowrap;transition:background .15s ease,color .15s ease}
 .card .plan:hover .pfill{background:var(--brand);color:#fff}
+.card .pnohint{font-size:12px;color:var(--tx3);padding:4px 2px}
 /* 聊天洞察卡片：评分条 + 情绪标签 */
 .card .mrow{display:flex;align-items:center;gap:8px;padding:7px 0}
 .card .mlab{flex:0 0 auto;width:58px;font-size:12px;color:var(--tx2);font-weight:600}
@@ -2841,11 +2842,16 @@ function cardHtml(json) {
   var rows = (c.rows || []).map(function (r) {
     return '<div class="crow"><span class="ck">' + esc(r.k) + '</span><span class="cv ' + (r.cls || '') + '">' + esc(r.v) + '</span></div>';
   }).join('');
-  var plans = (c.plans && c.plans.length) ? '<div class="plans"><div class="plh">💡 可以这样说</div>' + c.plans.map(function (t) {
-    return '<div class="plan" data-act="fill" data-text="' + attr(t) + '">' +
-      '<span class="pt">' + esc(t) + '</span>' +
-      '<span class="pfill">填入</span></div>';
-  }).join('') + '</div>' : '';
+  var plans = '';
+  if (c.plans && c.plans.length) {
+    plans = '<div class="plans"><div class="plh">💡 可以这样说</div>' + c.plans.map(function (t) {
+      return '<div class="plan" data-act="fill" data-text="' + attr(t) + '">' +
+        '<span class="pt">' + esc(t) + '</span>' +
+        '<span class="pfill">填入</span></div>';
+    }).join('') + '</div>';
+  } else if (c.plans) {
+    plans = '<div class="plans"><div class="plh">💡 可以这样说</div><div class="pnohint">暂无可生成的建议</div></div>';
+  }
   return '<div class="card' + (plans ? ' wplans' : '') + '">' +
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
@@ -3018,20 +3024,7 @@ var ANALYZE_LABELS = {
   quality: { '1_poor': '冒犯越界', '2_awkward': '不合语境', '3_flat': '平淡泛泛', '4_good': '接住话题', '5_great': '体贴到位' },
   next_action: { continue: '继续聊', ask: '问个问题', empathize: '回应感受', suggest: '提议一起做', invite: '低压力邀约', clarify: '温和确认', wait: '先等待', close: '收尾结束', respect: '尊重边界', insufficient: '信息不足' }
 };
-// 针对「建议动作」生成 3 条可直接发送的话术（聊天洞察专用，仅自己可见，不入库）
-var ANALYZE_PLANS = {
-  continue: ['刚才你说的那个，我还挺想知道后续呢～', '感觉咱们还能接着聊聊这个，你平时也喜欢研究这些吗？', '对了，你刚提到的事后来怎么样啦？'],
-  ask: ['对了，你是怎么想到这个的呀？', '那你之前有没有遇到过类似的情况？', '顺便好奇一下，你一般周末都怎么安排？'],
-  empathize: ['听你这么说，确实挺不容易的，抱抱你', '我能感觉到你有点在意这个，我陪你聊聊', '要是换作是我可能也会有点纠结，正常～'],
-  suggest: ['下次有空咱们可以一起试试这个', '要不这周末一起去？我请客', '改天约着一起做这个吧，应该挺有意思'],
-  invite: ['有空的话可以出来坐坐呀', '哪天顺路的话，一起喝杯东西？', '改天约一波？看你什么时候方便～'],
-  clarify: ['我理解得对吗，你的意思是……？', '等等，你是说……这样理解没错吧？', '所以你现在是觉得……我有点没跟上'],
-  wait: ['这事不急，你慢慢来就好', '先不急着回，想聊的时候再说', '没关系，等你方便了再说～'],
-  close: ['那今天就先到这儿啦，早点休息', '聊得挺开心的，你先忙去吧', '先这样，回头见～'],
-  respect: ['没关系，不想说也没事，我懂', '明白，这个我就不多问啦', '尊重你的节奏，按你舒服的来'],
-  insufficient: ['再多聊几句，我才能更好接住你～', '感觉信息还不太够，可以再多说点吗', '你再多分享一点，我帮你分析得更准']
-};
-function analyzePlans(key) { return ANALYZE_PLANS[key] || ANALYZE_PLANS.continue; }
+// 回复建议（plans）由服务端基于聊天记录调用本地模型生成，不再使用写死模板
 function analyzeCard(j) {
   var L = ANALYZE_LABELS;
   var moodProbs = Object.keys(j.mood.probabilities || {})
@@ -3048,7 +3041,7 @@ function analyzeCard(j) {
     { k: '对方意图', v: L.intent[j.intent.choice] || j.intent.choice || '—' },
     { k: '建议动作', v: L.next_action[j.next_action.choice] || j.next_action.choice || '—' }
   ];
-  var plans = analyzePlans(j.next_action && j.next_action.choice);
+  var plans = (j && Array.isArray(j.plans)) ? j.plans : null;
   return {
     logo: '📊', title: '聊天洞察', sub: '由 AI 分析，仅供参考 · ' + (j.model || ''),
     wide: true, bars: bars, tags: tags, rows: rows, plans: plans,
