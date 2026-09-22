@@ -2064,6 +2064,102 @@ function makeStub() {
       '拉取失败撤销 histLoaded 标记（下次进会话可重试）');
   }
 
+  // ===== 会话隔离（安全边界）：2026-09-22 改为 canReadConv 独立判据 =====
+  // 背景：messages 是全员共享表，任何客户端都能拉到所有人的消息。
+  // 隔离的唯一边界是 canReadConv()，这里把它的四条关键性质钉死。
+  {
+    const LT = w.LT;
+    const S = LT && LT.S;
+    if (LT && LT.canReadConv && S) {
+      const savedUid = S.uid;
+      const savedFriends = S.friends;
+      const savedMembers = S.members;
+      const savedGroups = S.groups;
+      const savedLocal = S.localConvs;
+      const savedRecent = S.recent;
+
+      S.uid = 'u_test';
+      S.friends = [];
+      S.members = { hall: ['u_test'] };
+      S.groups = [];
+      S.localConvs = {};
+      S.recent = [];
+      LT.rebuildMyConvs();
+
+      // ① 陌生人的私聊必须被拒（这是这个函数存在的理由）
+      log(LT.canReadConv('p:u_stranger_a~u_stranger_b') === false,
+        '隔离：陌生人之间的私聊不可读');
+      log(LT.canReadConv('p:u_test~u_stranger') === false,
+        '隔离：与陌生人（无好友关系）的私聊不可读');
+      // ② 大厅必须可读（否则首屏就是空的）
+      log(LT.canReadConv('g:hall') === true, '隔离：大厅可读');
+      // ③ 好友私聊可读 —— 关系数据驱动，不依赖消息
+      S.friends = [{ a: 'u_test', b: 'u_friend', status: 'accepted' }];
+      LT.rebuildMyConvs();
+      log(LT.canReadConv('p:u_friend~u_test') === true,
+        '隔离：好友私聊可读（由 friends 表推导，不依赖消息）');
+      log(LT.canReadConv('p:u_friend~u_other') === false,
+        '隔离：好友与他人的私聊仍不可读（不能顺带放行）');
+      // ④ 我正在的群可读，不在的群不可读
+      S.groups = [{ id: 'g1', name: '我的群' }, { id: 'g2', name: '别人的群' }];
+      S.members = { hall: ['u_test'], g1: ['u_test', 'u_friend'], g2: ['u_friend'] };
+      LT.rebuildMyConvs();
+      log(LT.canReadConv('g:g1') === true, '隔离：我在的群可读');
+      log(LT.canReadConv('g:g2') === false, '隔离：我不在的群不可读');
+      // ⑤ 发送即注册（上次翻车的根因：刚建好、关系未同步时不在白名单）
+      log(LT.canReadConv('p:u_new~u_test') === false, '隔离：尚未注册的新私聊，初始不可读');
+      LT.allowConv('p:u_new~u_test');
+      log(LT.canReadConv('p:u_new~u_test') === true,
+        '隔离：发送即注册后立刻可读（回归「刚建的会话收不到自己的消息」）');
+      // ⑥ 小美私聊始终可读（她不在 friends 表里）
+      S.friends = [];
+      LT.rebuildMyConvs();
+      log(LT.canReadConv('p:bot_xiaomei~u_test') === true,
+        '隔离：与小美的私聊始终可读（不依赖好友关系）');
+      // ⑦ onNew 必须真的拦下陌生会话的消息（端到端，不只是谓词）
+      const beforeMsgs = JSON.stringify(S.msgs['p:u_stranger_a~u_stranger_b'] || []);
+      LT.onNew({
+        id: 999999, conv: 'p:u_stranger_a~u_stranger_b', sender_id: 'u_stranger_a',
+        sender_name: '陌生人', text: '这条不该出现', type: 'text', created_at: new Date().toISOString(),
+      });
+      const afterMsgs = JSON.stringify(S.msgs['p:u_stranger_a~u_stranger_b'] || []);
+      log(beforeMsgs === afterMsgs, '隔离：onNew 拒收陌生人私聊（未写入内存）');
+      log(!(S.unread['p:u_stranger_a~u_stranger_b'] > 0), '隔离：陌生人私聊不计未读');
+      log(!(S.recent || []).some((m) => m.conv === 'p:u_stranger_a~u_stranger_b'),
+        '隔离：陌生人私聊不进 recent（防止污染会话推导）');
+
+      S.uid = savedUid;
+      S.friends = savedFriends;
+      S.members = savedMembers;
+      S.groups = savedGroups;
+      S.localConvs = savedLocal;
+      S.recent = savedRecent;
+      LT.rebuildMyConvs();
+    } else {
+      log(false, 'window.LT 已导出 canReadConv（会话隔离判据）', LT ? Object.keys(LT).join(',') : 'no LT');
+    }
+  }
+
+  // ===== 隔离的源码级回归锁：拉取侧必须收窄，不能只靠前端不显示 =====
+  {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const IJS = fsx.readFileSync(pathx.join(__dirname, 'index.html'), 'utf8');
+    // 轮询与首屏都必须带 conv 范围条件
+    log(IJS.indexOf("db.from('messages').select('*').in('conv', scope)") >= 0,
+      '隔离：tick 拉取带 conv 范围（messages 不再全表下传）');
+    log(IJS.indexOf("db.from('messages').select('*').in('conv', myConvList())") >= 0,
+      '隔离：refreshAll / 搜索 拉取带 conv 范围');
+    // 搜索结果（全表 ilike）必须再过一道白名单
+    log(IJS.indexOf('rows = (rows || []).filter(function (m) { return canReadConv(m.conv); })') >= 0,
+      '隔离：搜索聊天记录结果再过白名单（ilike 全表最易漏）');
+    // 不能再出现「以 cm() 是否存在」当隔离判据
+    log(IJS.indexOf('if (!canReadConv(m.conv)) return;') >= 0,
+      '隔离：onNew 以 canReadConv 为判据');
+    log(IJS.indexOf('会话列表推导不出来就说明这不是我的会话') < 0,
+      '隔离：旧的「cm() 查不到即非我会话」判据已移除');
+  }
+
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
   console.log('\n结果: ' + pass + ' 通过 / ' + fail + ' 失败\n');
   w.close();

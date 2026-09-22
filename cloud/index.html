@@ -773,6 +773,7 @@ var S = {
   cmdList: [],           // # 指令候选列表
   cmdIdx: 0,             // # 指令高亮下标
   cmdSuppress: 0,        // # 浮层抑制截止时间戳
+  myConvs: {},           // 会话 -> 1：我参与的会话白名单（读权限的唯一权威，见 canReadConv）
 };
 var BUILD = { sha: '15c9d63', date: '2026-09-21', subject: 'feat(mobile): 移动端/小屏终端适配（双版本）' }; // LT_BUILD
 // 版本标识：以 git 提交号为版本（由 scripts/stamp-version.mjs 写入 BUILD）
@@ -2081,7 +2082,6 @@ function refreshAll() {
     q(db.from('group_members').select('*')),
     q(db.from('friends').select('*')),
     q(db.from('reads').select('*')),
-    q(db.from('messages').select('*').order('id', { ascending: false }).limit(200)),
   ]).then(function (r) {
     S.profiles = {}; r[0].forEach(function (p) { S.profiles[p.id] = p; });
     S.groups = r[1];
@@ -2089,8 +2089,17 @@ function refreshAll() {
     S.myMuted = {}; r[2].forEach(function (m) { if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
     S.friends = r[3];
     applyReads(r[4]);
-    S.recent = r[5];
-    S.lastId = r[5].length ? r[5][0].id : 0;    if (S.me) S.me = S.profiles[S.uid] || S.me;
+    // ⚠️ 顺序关键：关系数据先到位 → 建白名单 → 再按白名单拉消息。
+    //    反过来的话（先拉消息再建白名单）会漏掉刚加入的群，因为它还不在白名单里。
+    rebuildMyConvs();
+    return q(db.from('messages').select('*').in('conv', myConvList()).order('id', { ascending: false }).limit(200));
+  }).then(function (msgs) {
+    // 再过滤一道：白名单是权威，即使服务端因为 RLS 配置失误多返回了行也不进内存
+    S.recent = (msgs || []).filter(function (m) { return canReadConv(m.conv); });
+    S.lastId = S.recent.length ? S.recent[0].id : 0;
+    // 白名单可能因 recent 里的历史私聊会话而扩张，收敛一次
+    rebuildMyConvs();
+    if (S.me) S.me = S.profiles[S.uid] || S.me;
     ensureBot();
     buildConvs();
     renderConvs();
@@ -2215,6 +2224,75 @@ function isFriend(pid) {
   });
 }
 function cm() { var m = {}; S.convs.forEach(function (c) { m[c.conv] = c; }); return m; }
+
+/* ===========================================================================
+ * 会话读权限（安全边界 —— 改这里前请先读 CONV-ISOLATION-PLAN.md）
+ *
+ * messages 表是全员共享的，所以「这条消息该不该让我看见」必须有个明确的判据。
+ * 这个判据就是 canReadConv()，它是**唯一**权威。
+ *
+ * ⚠️ 不要用 cm() / S.convs 代替它。S.convs 是渲染列表（带 last 预览、muted、
+ *    未读红点等展示字段），将来加「按名字过滤」「置顶折叠」之类需求时很容易被改坏。
+ *    把安全边界和渲染列表用同一个对象表达，就是这次重构要拆开的东西。
+ *
+ * ⚠️ 白名单的来源只能是**关系数据**（我是谁的群成员 / 谁是我的好友），
+ *    绝不能用「已加载的消息」推导 —— 否则会形成循环：
+ *    白名单要靠消息来算，而消息又要靠白名单才进得来。
+ *    这个循环上次让 379 项测试掉到 149 项（详见方案文档）。
+ * =========================================================================== */
+
+// 重建白名单。数据同步（refreshAll / heavy tick）后调用，成本 O(好友数 + 群数)。
+function rebuildMyConvs() {
+  var set = {};
+  // 群：我在 group_members 里，或这是大厅
+  (S.groups || []).forEach(function (g) {
+    if (g.is_hall) { set[gconv(g.id)] = 1; set[g.id] = 1; return; }
+    if ((S.members[g.id] || []).indexOf(S.uid) >= 0) set[gconv(g.id)] = 1;
+  });
+  // 大厅兜底：即使 groups 还没同步，也允许读
+  if (S.members && S.members.hall) set[gconv('hall')] = 1;
+  // 私聊：好友关系（accepted）—— 不依赖 messages
+  (S.friends || []).forEach(function (f) {
+    if (f.status !== 'accepted') return;
+    var other = f.a === S.uid ? f.b : (f.b === S.uid ? f.a : null);
+    if (other && other !== S.uid) set[pconv(S.uid, other)] = 1;
+  });
+  // 私聊：最近消息里出现过的会话（推导源，非权威 —— 只是让历史会话不丢）
+  (S.recent || []).forEach(function (m) {
+    if (!m.conv || String(m.conv).indexOf('p:') !== 0) return;
+    var pair = m.conv.slice(2).split('~');
+    if (pair.indexOf(S.uid) >= 0) set[m.conv] = 1;
+  });
+  // 小美：固定可读（她不在 friends 表里也可能被私聊）
+  if (S.uid) set[pconv(S.uid, BOT.id)] = 1;
+  // 本地导入的会话：是我自己导进来的，可读
+  Object.keys(S.localConvs || {}).forEach(function (cv) { set[cv] = 1; });
+  // 自己已发过言的会话：发送即注册，保证刚建好还没同步关系的会话不被拦
+  Object.keys(S.msgs || {}).forEach(function (cv) {
+    var arr = S.msgs[cv];
+    if (arr && arr.some(function (m) { return m.sender_id === S.uid; })) set[cv] = 1;
+  });
+  S.myConvs = set;
+  return set;
+}
+
+// 单条会话的就地注册（发送成功、新建会话后立刻调用，不等下一次同步）
+function allowConv(conv) {
+  if (!conv) return;
+  S.myConvs = S.myConvs || {};
+  S.myConvs[conv] = 1;
+}
+
+// 读权限判定：这是**唯一**该被用来决定「能否读某会话」的函数
+function canReadConv(conv) {
+  if (!conv || !S.uid) return false;
+  if (!S.myConvs || !Object.keys(S.myConvs).length) rebuildMyConvs();
+  return !!S.myConvs[conv];
+}
+
+// 是否只含我参与的会话（供拉取侧使用，见 tick / refreshAll）
+function myConvList() { return Object.keys(S.myConvs || {}); }
+
 function ensureConv(conv, type, id) {
   if (cm()[conv]) return cm()[conv];
   var c;
@@ -2243,9 +2321,15 @@ function tick() {
   S.busy = true;
   S.tickCount++;
   var heavy = S.tickCount % 4 === 0;
+  if (heavy) rebuildMyConvs();   // 关系数据每 heavy 轮刷新一次，白名单同频重建
+  // ⚠️ 会话隔离（方案 B）：只拉「我参与的会话」的消息，而不是全表。
+  //    messages 是全员共享表，不加这个条件的话陌生人私聊的正文照样会下传到浏览器，
+  //    只是不显示而已 —— 那不叫隔离。
+  //    边界仍由 RLS 兜底：canReadConv 让请求更窄，不是唯一防线。
+  var scope = myConvList();
   // 好友表每次轮询都拉（很小），这样对方发来的好友请求 2.5 秒内就能看到，不用刷新
   var jobs = [
-    q(db.from('messages').select('*').gt('id', S.lastId).order('id', { ascending: true }).limit(200)),
+    q(db.from('messages').select('*').in('conv', scope).gt('id', S.lastId).order('id', { ascending: true }).limit(200)),
     q(db.from('friends').select('*')),
     q(db.from('profiles').select('*')),   // 每轮都拉（表很小）：「正在输入」状态 2.5 秒内可见
     q(db.from('live').select('*').eq('status', 'live').limit(1)),
@@ -2264,20 +2348,41 @@ function tick() {
       r[5].forEach(function (m) { (S.members[m.group_id] = S.members[m.group_id] || []).push(m.user_id); if (m.user_id === S.uid) S.myMuted[m.group_id] = !!m.muted; });
       S.groups = r[6];
       applyReads(r[7]);
-      buildConvs();
-      updateOnline();
-      if (S.cur) renderMsgs();
+      // 关系数据刚更新 → 立刻重建白名单，让本轮与下一轮的 scope 都是最新的
+      rebuildMyConvs();
     }
-    updateTyping();
+    // 先消化消息：onNew 内部会做 canReadConv 判定
     fresh.forEach(function (m) {
       if (m.id > S.lastId) S.lastId = m.id;
       onNew(m);
     });
+    updateTyping();
+    if (heavy) {
+      buildConvs();
+      updateOnline();
+      if (S.cur) renderMsgs();
+    }
     if (fresh.length || heavy) { renderConvs(); updTitle(); }
     setSync('云端已同步');
+    // 白名单刚扩张（新加群/新好友）时补拉一次，避免「第一轮 scope 太窄」漏掉消息
+    if (heavy) catchUpScoped();
   }).catch(function (e) {
     setSync('连接异常', true);
   }).then(function () { S.busy = false; });
+}
+
+// 白名单扩张后补拉一次消息：解决「新会话在自己的第一条消息到达时还不在 scope 里」的时序问题。
+// 只在 heavy 轮触发（也就是每 10 秒最多一次），代价可控。
+function catchUpScoped() {
+  var scope = myConvList();
+  return q(db.from('messages').select('*').in('conv', scope).order('id', { ascending: false }).limit(200))
+    .then(function (rows) {
+      (rows || []).forEach(function (m) {
+        if (m.id > S.lastId) S.lastId = m.id;
+        onNew(m);
+      });
+      renderConvs(); updTitle();
+    }).catch(function () { return null; });
 }
 // 好友表增量对比：新请求 / 被接受 -> 弹提示 + 红点，无需刷新
 function syncFriends(rows) {
@@ -2306,14 +2411,19 @@ function syncFriends(rows) {
   if (changed) { buildConvs(); renderConvs(); }
 }
 function onNew(m) {
-  var c = cm()[m.conv];
-  if (!c) { buildConvs(); c = cm()[m.conv]; }
-  // ⚠️ 安全边界：会话列表推导不出来就说明这不是我的会话。
+  if (!m || !m.conv) return;
+  // ⚠️ 安全边界：先判读权限，再取会话对象。
   //    消息表是全员共享的，若对不属于自己的会话照单全收，会被 pushMsg 进内存、计未读，
   //    还会把陌生人私聊的正文弹到系统桌面通知上。
-  //    会话在列表里的出现时机晚于它的第一条消息（群刚拉进来 / 对方刚发来），
-  //    所以 buildConvs 之后仍取不到才判定为「非我的会话」。
-  if (!c) return;
+  //    判据是 canReadConv()（见其定义处的说明），**不是**「cm() 能不能查到」——
+  //    后者是渲染列表，不承担隔离职责。
+  if (!canReadConv(m.conv)) return;
+  var c = cm()[m.conv];
+  if (!c) { buildConvs(); c = cm()[m.conv]; }
+  // 会话对象仍取不到（渲染列表还没跟上）时，不直接丢弃消息：
+  // 权限已经通过了，这里只补一个会话对象，避免「有权限但侧栏还没这一条」时消息丢失。
+  if (!c) c = ensureConv(m.conv, String(m.conv).indexOf('p:') === 0 ? 'private' : 'group',
+    String(m.conv).indexOf('p:') === 0 ? convPeer(m) : String(m.conv).replace(/^g:/, ''));
   var isCurrent = m.conv === S.cur;
   var canRead = isCurrent && !document.hidden;
   if (canRead) markRead(m.conv);
@@ -3221,8 +3331,11 @@ function sendMsg(o) {
   };
   return q(db.from('messages').insert(payload).select()).then(function (rows) {
     var m = rows[0];
-    // 自己发出的消息同样要写进 recent：否则下一次 buildConvs 会用旧的 recent 回退侧栏预览，
-    // 且侧栏未读统计也会因 recent 不完整而算错（表现为「最新消息/时间对不上」「私聊没有未读红点」）。
+    // ⚠️ 发送即注册（兜底）：我自己发过言的会话必然属于我。
+    //    这里必须显式注册，不能指望下次 rebuildMyConvs ——
+    //    刚建好的会话在关系数据同步到之前不在白名单里，而它的第一条消息
+    //    正是我刚发的这条，不注册就会被自己的隔离规则拦掉（上次翻车的原因）。
+    allowConv(S.cur);
     if (m) { if (m.id > S.lastId) S.lastId = m.id; pushMsg(S.cur, m); trackRecent(m); c.last = m; }
     S.reply = null; $('#rBar').classList.add('hidden');
     renderMsgs('bottom'); buildConvs(); renderConvs();
@@ -3477,6 +3590,13 @@ window.LT = {
   agentProbe: function () { return agentProbe(); },
   botAgent: function (t, w0, c) { return botAgent(t, w0, c); },
   botAnswer: function (t, w0, c) { return botAnswer(t, w0, c); },
+  // 供测试断言会话隔离（安全边界）：白名单、判定、重建
+  canReadConv: function (cv) { return canReadConv(cv); },
+  rebuildMyConvs: function () { return rebuildMyConvs(); },
+  allowConv: function (cv) { return allowConv(cv); },
+  myConvList: function () { return myConvList(); },
+  myConvs: function () { return S.myConvs; },
+  onNew: function (m) { return onNew(m); },
 };
 $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeModal(); };
 // 启动后探测意图路由能力（服务端未配置密钥时保持关闭，行为与之前完全一致）
@@ -3576,7 +3696,9 @@ $('#bFind').onclick = function () {
     timer = setTimeout(function () {
       var kw = $('#fq').value.trim();
       if (!kw) { $('#fr').innerHTML = ''; return; }
-      q(db.from('messages').select('*').ilike('text', '%' + kw + '%').order('id', { ascending: false }).limit(30)).then(function (rows) {
+      q(db.from('messages').select('*').in('conv', myConvList()).ilike('text', '%' + kw + '%').order('id', { ascending: false }).limit(30)).then(function (rows) {
+        // 再过滤一道：搜索结果绝不能带出别人的私聊（这里是全表 ilike，最容易漏）
+        rows = (rows || []).filter(function (m) { return canReadConv(m.conv); });
         $('#fr').innerHTML = rows.length ? rows.map(function (m) {
           var c = cm()[m.conv];
           return '<div class="ritem" data-c="' + esc(m.conv) + '">' + avOf(m.sender_name, m.sender_avatar, m.sender_color, 's')
