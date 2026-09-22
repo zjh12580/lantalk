@@ -335,6 +335,27 @@
     if (/查一下|查查|帮我查|搜一下|搜搜|搜索|上网|百度|谷歌|google|是什么|为什么|多少|哪家|哪个|哪位|什么时候|何时|谁|在哪|地址|电话|价格|多少钱|票价|汇率|比分|排名|上映|发布|更新|版本|最新|最近|今天|昨天|明天|现在|目前|今年|新闻|消息|进展|情况|政策|规定|名单|数据|统计|截至/i.test(t)) return true;
     return t.length >= 12;
   }
+  // 检索词清洗：把「@小美」「查一下」这类指令词剥掉，留下干净的查询串，
+  // 否则维基/DuckDuckGo 会拿整句指令去搜，命中率极低（踩过）
+  function sanitizeQuery(text) {
+    // ⚠️ 必须先归并空白再剥指令词：`@小美 查一下 X` 把「@小美」换成空格后
+    //    字符串变成「 查一下 X」（**带前导空格**），而下面的正则用 `^` 锚定行首 →
+    //    前导空格一挡，`查一下` 就剥不掉了，检索词带着指令词去查维基（踩过）。
+    var s = String(text || '')
+      .replace(/@小美/g, ' ')
+      .replace(/[?？。！!，,、；;：:]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // 循环剥离：用户可能叠着说「帮我查一下」「麻烦你帮我搜一下」（三层前缀都能剥）
+    for (var i = 0, prev = ''; i < 8 && s !== prev; i++) {
+      prev = s;
+      s = s.replace(/^(帮我|请|麻烦你?|小美|我要|我想|想知道|了解一下)\s*/, ' ');
+      s = s.replace(/^(查一下|查查|查询|查|搜一下|搜搜|搜索|搜|找一下|找找|查找|上网查|百度一下|谷歌一下|google一下|说说|解释一下|介绍一下|科普一下|总结一下|总结|汇总|看看|看)+/, ' ');
+      s = s.replace(/^(的|一下|下|个|关于|有关|一下下)+/, ' ');
+      s = s.replace(/\s+/g, ' ').trim();
+    }
+    return s;
+  }
 
   // 天气 / 新闻 / 热点：免 key 公开源
   function wmoText(c) {
@@ -350,11 +371,36 @@
     if (c >= 95) return '雷雨 ⛈️';
     return '天气未知 🤔';
   }
+  // 时间词/动词/语气词：会出现在地名的**前面**（明天上海）或**后面**（广州今天、会不会、呢），
+  // 两头都要剥，否则「广州今天多少度」会解析出「广州今天」（踩过）
+  var CITY_PRE = /^(今天|明天|后天|大后天|现在|当前|昨日|昨天|明儿|明早|今晚|今早|中午|早上|晚上|下午|上午|这会儿|的|查|查下|查一下|查询|看看|看|报|报个|说说|问|问下|问一下|告诉我|知道|帮我|帮|我想|我要|了解|一下|下|个)+/;
+  var CITY_POST = /(今天|明天|后天|现在|当前|这两天|这几天|最近|今日|明日|的天气|天气|气温|温度|要不要带伞|要带伞|带伞吗|会不会|会不|会|要|下不下雨|下雨|下雪|冷不冷|热不热|多少度|怎么样|怎样|如何|呢|吗|吧|啊|呀|哈|哦|喔|了|的)+$/;
+  // 从自然语言里解析城市名（抽出来单独可测，天气主流程只负责取数据）
+  function parseCity(text) {
+    var raw = String(text || '')
+      .replace(/@小美/g, '').replace(/[\?？。！!，,、；;:：]/g, ' ');
+    // 先剥掉「天气/气温/温度/下雨…」这些触发词本身
+    raw = raw.replace(/(的)?(天气|气温|温度|下雨|下雪|下不下雨|多少度|穿什么|冷不冷|热不热)/g, ' ');
+    var city = '';
+    // 逐段剥噪声：段内先剥前缀，再剥后缀（可能叠多层，循环剥）
+    var seg = raw.split(/\s+/).filter(Boolean);
+    for (var i = 0; i < seg.length; i++) {
+      var w = seg[i], guard = 0;
+      while (guard++ < 10) {
+        var before = w;
+        w = w.replace(CITY_PRE, '').replace(CITY_POST, '').trim();
+        if (w === before) break;
+      }
+      w = w.replace(/[的地得]$/, '').trim();
+      if (w) { city = w; break; }
+    }
+    if (!city || !/[\u4e00-\u9fa5a-zA-Z]/.test(city)) city = '北京';
+    // 过长的（>8 字）大概率是句子而非地名，直接退回北京，别拿整句去 geocode
+    if (city.length > 8) city = '北京';
+    return city;
+  }
   function botWeather(text, who) {
-    var t = String(text || '');
-    var m = t.match(/([\u4e00-\u9fa5]{2,8}?)(?:的)?(?:天气|气温|温度|下雨|下雪|多少度)/);
-    var city = m ? m[1].replace(/^(查|看看|看|报|报个|说说|问|一下|下)/, '') : '';
-    if (!city || /^(今天|明天|后天|现在|当前|一下|个|我|你|他)$/.test(city)) city = '北京';
+    var city = parseCity(text);
     var geoUrl = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city) + '&count=1&language=zh&format=json';
     return fetch(geoUrl).then(function (r) { return r.json(); }).then(function (g) {
       var hit = g && g.results && g.results[0];
@@ -386,18 +432,48 @@
     if (!lines.length) return null;
     return lines.join('\n') + (d.weiyu ? '\n\n🍃 ' + d.weiyu : '');
   }
+  // ⚠️ 源会失效，按「当前实测可用」排序；失效的直接换掉。
+  //    2026-09-22 实测：原三源（60s.vip / vvhan / oioweb）全部 curl 000（已挂），
+  //    viki.moe 返回真实当日新闻且带 `Access-Control-Allow-Origin: *`，提到首位。
   var NEWS_SOURCES = [
+    { u: 'https://60s-api.viki.moe/v2/60s', pick: function (j) { return parse60s(j); } },
     { u: 'https://60s.vip/api/60s', pick: function (j) { return parse60s(j); } },
     { u: 'https://api.vvhan.com/api/60s', pick: function (j) { return parse60s(j); } },
     { u: 'https://api.oioweb.cn/api/common/60s', pick: function (j) { return parse60s(j); } },
   ];
-  function botNews() {
-    return fetchFirst(NEWS_SOURCES).then(function (body) { return '📰 新闻速览\n' + body; })
-      .catch(function () { return '📰 新闻源今天集体打不通了 😥 稍后再叫我试试～'; });
+  // 新闻/热点：真实日报源挂了不再直接报错，退化为「联网检索 + 模型总结」，
+  // 再不济才说打不通 —— 用户要的是「有内容」，不是一个错误提示（踩过）
+  function botNewsFallback(kind) {
+    var qs = kind === 'hot' ? '今日热点 热搜 话题' : '今日新闻 要闻';
+    return ensureLLM().then(function () {
+      var s = S();
+      if (!s.llmModel) return null;
+      return searchWeb(qs).then(function (rows) {
+        if (!rows || !rows.length) return null;
+        var ref = rows.map(function (x, i) {
+          return (i + 1) + '. ' + x.title + (x.snippet ? '：' + x.snippet : '');
+        }).join('\n');
+        var ctx = {
+          who: '', hint: '用户在问「' + (kind === 'hot' ? '今日热点' : '新闻') + '」。'
+            + '请基于【联网资料】整理成 5 条以内的要点，每条一行、以序号开头；'
+            + '资料里没有的不要编，最后可以加一句你自己的感想。不要输出思考过程。',
+          temp: 0.6, mem: [], ref: ref,
+        };
+        return callLLM(qs, ctx, null).then(function (out) {
+          return out ? '📰 ' + (kind === 'hot' ? '今日热点' : '新闻速览') + '（实时整理）\n' + out : null;
+        });
+      });
+    }).catch(function () { return null; });
   }
-  function botHot() {
+  function botNews(kind) {
+    return fetchFirst(NEWS_SOURCES).then(function (body) { return '📰 新闻速览\n' + body; })
+      .catch(function () { return botNewsFallback('news'); })
+      .then(function (s) { return s || '📰 新闻源今天打不通，我上网也没搜到靠谱的，{n}过会儿再问我试试～'; });
+  }
+  function botHot(kind) {
     return fetchFirst(NEWS_SOURCES).then(function (body) { return '🔥 今日热点\n' + body; })
-      .catch(function () { return '🔥 热点源暂时失联了 😥 稍后再叫我试试～'; });
+      .catch(function () { return botNewsFallback('hot'); })
+      .then(function (s) { return s || '🔥 热点源今天打不通，我上网也没搜到靠谱的，{n}过会儿再问我试试～'; });
   }
 
   // ================================================================
@@ -475,8 +551,19 @@
       temp: 0.9,
     },
     // ---- 事实型：真实数据源 ----
-    { id: 'news', kind: 'data', k: /新闻|日报|60秒|看报|时事/, run: function () { return botNews(); } },
-    { id: 'hot', kind: 'data', k: /热点|热搜|头条|大事|瓜/, run: function () { return botHot(); } },
+    { id: 'news', kind: 'data', k: /新闻|日报|60秒|看报|时事/, run: function () { return botNews('news'); } },
+    { id: 'hot', kind: 'data', k: /热点|热搜|头条|大事|瓜/, run: function () { return botHot('hot'); } },
+    // 联网问答：显式检索诉求（查一下/搜一下/教程/怎么用/文档…）走「真实检索 + 模型总结」，
+    // ⚠️ 必须排在 chat 之前，否则会被闲聊兜底吞掉（用户反馈「不能联网查技能」就是这个原因）
+    {
+      id: 'lookup', kind: 'gen',
+      k: /查一下|查查|帮我查|搜一下|搜搜|搜索|上网查|百度|谷歌|google|找一下|找找|查找|搜|教程|怎么用|怎么使用|如何使用|怎么|如何|用法|文档|手册|命令|指令|语法|示例|例子|总结一下|总结|汇总|资料|百科|解释一下|解释|介绍一下|介绍|科普|是什么|什么是|为什么/,
+      hint: '用户想让你联网查资料或讲某个知识点。请**优先依据【联网资料】认真、准确地回答**，'
+        + '给具体可用的信息（命令、步骤、结论），必要时分点；'
+        + '资料里没有明确讲到的就不要编，可以直接说「这部分我没查到，不过据我所知…」。'
+        + '不要输出思考过程，不要客套，直接给干货。',
+      temp: 0.6,
+    },
     { id: 'weather', kind: 'data', k: /天气|气温|温度|下雨|下雪|多少度|穿什么/, run: function (c) { return botWeather(c.text, c.who); } },
     // ---- 闲谈兜底：闲聊不抽签，交给模型 ----
     { id: 'chat', kind: 'gen', k: /./ },
@@ -535,34 +622,48 @@
   }
 
   // ================================================================
-  // 八、模型调用（沿用 keyless 网关；新增：流式回调 + 生成温度）
+  // 八、模型调用（沿用 keyless 网关；新增：流式回调 + 生成温度 + 多模型回退）
   // ================================================================
-  var LLM_TIMEOUT = 45000;
+  // ⚠️ 45s 太长：推理模型跑长思考链时会一直不出正文，用户等到 45 秒才看到「卡了一下」，体验极差。
+  //    降到 30s，失败后立刻换下一个模型重试（用户感知是「稍慢但答上了」而不是「卡住了」）。
+  var LLM_TIMEOUT = 30000;
+  var LLM_RETRY = 2;          // 单个模型最多重试次数（含换模型）
 
   function ensureLLM() {
     var s = S(), CLOUD = host().CLOUD;
-    if (s.llmTried) return Promise.resolve();
-    s.llmTried = true;
-    return CLOUD.llm.models.list().then(function (models) {
-      if (!models || !models.length) return;
+    // ⚠️⚠️ 必须缓存 Promise 而不是布尔值！
+    //    原实现 `if (s.llmTried) return Promise.resolve();` 有致命竞态：
+    //    并发第二次调用时会「立即 resolve 但 llmModel 还没赋值」→ runGen 拿到 null
+    //    → 秒回 {fallback:true} → 用户看到「哎呀我这边卡了一下」。
+    //    这正是「linux 查找文件 1 秒就回卡住了」的真因（模型其实完全可用，30 个模型都能列出来）。
+    if (s.llmReady) return s.llmReady;
+    s.llmReady = CLOUD.llm.models.list().then(function (models) {
+      var arr = Array.isArray(models) ? models : (models && Array.isArray(models.data) ? models.data : []);
+      if (!arr.length) return;
       var ok = function (m) { return m && m.disabled !== true && m.enabled !== false; };
-      var avail = models.filter(ok);
+      var avail = arr.filter(ok);
       if (!avail.length) return;
+      // 候选链：按 LLM_PREFERRED 顺序挑出所有可用 deepseek，失败可依次回退
+      s.llmQueue = [];
       var want = null;
       try { want = new URLSearchParams(location.search).get('llm'); } catch (e) {}
-      if (want) { var hit = avail.filter(function (m) { return m.id === want; })[0]; if (hit) { s.llmModel = hit.id; return; } }
-      // ⚠️ 必须精确匹配：/deepseek/i 模糊匹配会命中云上全部 4 个 deepseek，选中哪个全看列表顺序
-      for (var i = 0; i < LLM_PREFERRED.length; i++) {
-        var p = avail.filter(function (m) { return m.id === LLM_PREFERRED[i]; })[0];
-        if (p) { s.llmModel = p.id; return; }
-      }
-      var ds = avail.filter(function (m) { return /deepseek/i.test((m.id || '') + ' ' + (m.name || '')); })[0];
-      s.llmModel = (ds || avail[0]).id;
-    }).catch(function () { s.llmModel = null; });
+      LLM_PREFERRED.forEach(function (id) {
+        var hit = avail.filter(function (m) { return m.id === id; })[0];
+        if (hit && s.llmQueue.indexOf(hit.id) < 0) s.llmQueue.push(hit.id);
+      });
+      // 兜底：其它可用 deepseek / 任意可用模型
+      avail.forEach(function (m) {
+        if (/deepseek/i.test((m.id || '') + ' ' + (m.name || '')) && s.llmQueue.indexOf(m.id) < 0) s.llmQueue.push(m.id);
+      });
+      if (want && avail.filter(function (m) { return m.id === want; })[0]) s.llmQueue.unshift(want);
+      avail.forEach(function (m) { if (s.llmQueue.indexOf(m.id) < 0) s.llmQueue.push(m.id); });
+      s.llmModel = s.llmQueue[0] || null;
+    }).catch(function () { s.llmQueue = []; });
+    return s.llmReady;
   }
   var LLM_PREFERRED = ['deepseek-v4.1-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v3-2-volc'];
 
-  // onDelta：可选流式回调（首字即上屏，不用等 45s 整段）
+  // onDelta：可选流式回调（首字即上屏，不用等超时整段）
   function callLLM(text, ctx, onDelta) {
     var CLOUD = host().CLOUD, s = S();
     if (!CLOUD || !CLOUD.llm || !CLOUD.llm.chat || !CLOUD.llm.chat.completions) return Promise.reject(new Error('llm unavailable'));
@@ -570,42 +671,48 @@
     var sys = buildSystem(ctx);
     var hist = recentContext(ctx.conv, ctx.who);
     var messages = [{ role: 'system', content: sys }].concat(hist, [{ role: 'user', content: text }]);
-    // ⚠️ 云上 DeepSeek 全是纯推理模型（onlyReasoning），采样参数由模型锁定，
-    //    强行传 temperature 可能被拒 —— 只有内容型意图（笑话/故事）才尝试带上，失败自动重试无参版本。
-    var body = { model: s.llmModel, messages: messages, stream: true };
-    if (ctx && ctx.temp != null) body.temperature = ctx.temp;
 
-    function run(req) {
+    function once(model, withTemp) {
+      // ⚠️ 云上 DeepSeek 全是纯推理模型（onlyReasoning），采样参数由模型锁定，
+      //    强行传 temperature 可能被拒 —— 内容型意图才尝试带，失败自动重试无参版本。
+      var body = { model: model, messages: messages, stream: true };
+      if (withTemp && ctx && ctx.temp != null) body.temperature = ctx.temp;
       var content = '';
       var ctrl = new AbortController();
       var to = setTimeout(function () { ctrl.abort(); }, LLM_TIMEOUT);
-      req.signal = ctrl.signal;
-      var done = function () { clearTimeout(to); };
-      var loop = function () {
-        var iter = CLOUD.llm.chat.completions.create(req);
-        return (async function () {
-          try {
-            for await (var chunk of iter) {
-              var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
-              // 只收正文：推理模型会先吐 reasoning_content（思考链），收进来会把"内心戏"发进聊天室
-              if (d && d.content) { content += d.content; if (onDelta) { try { onDelta(content); } catch (e) {} } }
-            }
-          } finally { done(); }
-        })();
-      };
-      return loop().then(function () {
+      body.signal = ctrl.signal;
+      var iter = CLOUD.llm.chat.completions.create(body);
+      return (async function () {
+        try {
+          for await (var chunk of iter) {
+            var d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+            // 只收正文：推理模型会先吐 reasoning_content（思考链），收进来会把"内心戏"发进聊天室
+            if (d && d.content) { content += d.content; if (onDelta) { try { onDelta(content); } catch (e) {} } }
+          }
+        } finally { clearTimeout(to); }
+      })().then(function () {
         if (!content.trim()) throw new Error('empty');
         return content.trim();
       });
     }
-    return run(body).catch(function (e) {
-      // 带 temperature 被拒 → 去掉采样参数重试一次
-      if (body.temperature != null) {
-        var b2 = { model: body.model, messages: body.messages, stream: true };
-        return run(b2);
-      }
-      throw e;
+
+    // 回退链：候选模型 × (带温度 / 不带温度)
+    var queue = (s.llmQueue && s.llmQueue.length ? s.llmQueue.slice() : [s.llmModel]);
+    var attempts = [];
+    queue.forEach(function (m) {
+      attempts.push({ model: m, temp: true });
+      attempts.push({ model: m, temp: false });
     });
+    attempts = attempts.slice(0, Math.max(2, LLM_RETRY * 2));
+
+    var i = 0;
+    function next(lastErr) {
+      if (i >= attempts.length) return Promise.reject(lastErr || new Error('llm failed'));
+      var a = attempts[i++];
+      // 已经吐出过部分内容的，不要换模型从头再来（会把重复内容叠上去）
+      return once(a.model, a.temp).catch(function (e) { return next(e); });
+    }
+    return next();
   }
 
   // ================================================================
@@ -639,21 +746,26 @@
       catch (e) { return null; }
     }
     // kind === 'gen' 或 'chat' —— 需要模型，先取记忆再交给 botReply 的异步分支
-    return { __gen: true, hint: it.hint || '', temp: it.temp, text: t, who: who, conv: conv };
+    // ⚠️ 必须带上 it.id：runGen 靠它判断 lookup 意图要「强制联网」
+    return { __gen: true, id: it.id, hint: it.hint || '', temp: it.temp, text: t, who: who, conv: conv };
   }
 
   // 需要模型时的完整流程（喂记忆 + 可能联网 + 流式）
   function runGen(plan, onDelta) {
     var s = S();
+    // ensureLLM() 现在返回缓存的 Promise —— await 它就能保证 llmModel 已就绪，
+    // 不会出现「Promise 已 resolve 但模型还没选上」的窗口（见 ensureLLM 注释）
     return ensureLLM().then(function () {
       if (!s.llmModel) return { fallback: true };
       // 长期记忆：先确保载入过云端
       return memLoad().then(function () {
         var rel = memRecall(plan.text, s.uid);
         var ctx = { conv: plan.conv, who: plan.who, hint: plan.hint, temp: plan.temp, mem: rel };
-        var needSearch = s.webSearch !== false && searchNeed(plan.text) && !/^记住|忘掉/.test(plan.text);
+        // lookup 意图是「用户明确要求联网查」→ 强制检索，不再交给 searchNeed 猜
+        var forced = plan.id === 'lookup';
+        var needSearch = s.webSearch !== false && (forced || searchNeed(plan.text)) && !/^记住|忘掉/.test(plan.text);
         if (!needSearch) return callLLM(plan.text, ctx, onDelta).then(function (out) { return { text: out }; });
-        return searchWeb(plan.text).then(function (rows) {
+        return searchWeb(sanitizeQuery(plan.text)).then(function (rows) {
           if (rows && rows.length) {
             ctx.ref = rows.map(function (x, i) { return (i + 1) + '. ' + (x.title || '') + (x.snippet ? '：' + x.snippet : ''); }).join('\n');
           }
@@ -671,8 +783,8 @@
     MENU: MENU,
     botAnswer: botAnswer, runGen: runGen, matchIntent: matchIntent,
     buildSystem: buildSystem, recentContext: recentContext,
-    searchWeb: searchWeb, searchNeed: searchNeed,
-    botWeather: botWeather, botNews: botNews, botHot: botHot,
+    searchWeb: searchWeb, searchNeed: searchNeed, sanitizeQuery: sanitizeQuery,
+    botWeather: botWeather, botNews: botNews, botHot: botHot, parseCity: parseCity,
     moodNow: moodNow, moodTouch: moodTouch, setMood: setMood, restoreMood: restoreMood, moodByHour: moodByHour,
     memAdd: memAdd, memLoad: memLoad, memRecall: memRecall, memStore: memStore, memDrop: memDrop,
     ensureLLM: ensureLLM, LLM_PREFERRED: LLM_PREFERRED, LLM_TIMEOUT: LLM_TIMEOUT,

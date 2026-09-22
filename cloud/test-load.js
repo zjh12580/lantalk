@@ -709,7 +709,7 @@ function makeStub() {
     //    但必须精确命中优先级最高的 deepseek-v4.1-flash（不是列表第一个）
     await sleep(300);
     if (LT && LT.ensureLLM) {
-      LT.S.llmTried = false; LT.S.llmModel = null;
+      delete LT.S.llmReady; LT.S.llmModel = null;
       __llmListCalls = 0;
       await LT.ensureLLM();
       log(LT.S.llmModel === 'deepseek-v4.1-flash',
@@ -717,7 +717,7 @@ function makeStub() {
       log(__llmListCalls === 1, '拉取模型目录 1 次', __llmListCalls);
       // 幂等：再调一次不应重复拉目录
       await LT.ensureLLM();
-      log(__llmListCalls === 1, 'ensureLLM 幂等（llmTried 生效，不重复拉目录）', __llmListCalls);
+      log(__llmListCalls === 1, 'ensureLLM 幂等（llmReady 生效，不重复拉目录）', __llmListCalls);
     } else {
       log(false, 'window.LT.ensureLLM 已导出', LT ? Object.keys(LT).join(',') : 'no LT');
     }
@@ -727,7 +727,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = saved.map((m) => (m.id === 'deepseek-v4.1-flash' ? { id: m.id, name: m.name, disabled: true } : m));
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        delete LT.S.llmReady; LT.S.llmModel = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'deepseek-v4-flash', '首选被 disabled → 跳到次选', String(LT.S.llmModel));
       }
@@ -739,7 +739,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: true }];
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        delete LT.S.llmReady; LT.S.llmModel = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === 'glm-5.3', '目录无 deepseek → 兜底任意可用模型', String(LT.S.llmModel));
       }
@@ -751,7 +751,7 @@ function makeStub() {
       const saved = __llmModels.slice();
       __llmModels = [];
       if (LT && LT.ensureLLM) {
-        LT.S.llmTried = false; LT.S.llmModel = null;
+        delete LT.S.llmReady; LT.S.llmModel = null;
         await LT.ensureLLM();
         log(LT.S.llmModel === null, '模型目录为空 → llmModel 保持 null（走旧兜底话术）', String(LT.S.llmModel));
       }
@@ -1543,7 +1543,8 @@ function makeStub() {
     log(/function buildSystem/.test(src2) && /ref/.test(src2),
       'system 提示组装函数 buildSystem 接受检索资料（ref）');
     log(/联网检索到的资料/.test(src2), 'system 提示里明确要求「优先依据资料回答、查不到就说查不到」');
-    log(/searchWeb\(plan\.text\)/.test(src2), 'runGen 会先 searchWeb 再把资料喂给模型');
+    log(/searchWeb\(sanitizeQuery\(plan\.text\)\)/.test(src2),
+      'runGen 会先 searchWeb（带检索词清洗）再把资料喂给模型');
     log(/s\.webSearch !== false/.test(src2), '提供 S.webSearch 开关（可一键关掉联网）');
   }
 
@@ -1830,6 +1831,127 @@ function makeStub() {
       const avFn = String(w.LT.avOf ? w.LT.avOf('测试', 'data:image/png;base64,AA', '#888', 'm') : '');
       log(!/width:100%;height:100%/.test(avFn),
         'avOf 不再给 img 写行内 width/height（避免盖掉铺满 CSS）', avFn || '(未导出 avOf，跳过)');
+    }
+  }
+
+  // ===== 小美回归修复（2026-09-22 第二轮）：地名解析 / 重复回复 / 联网问答 / 模型回退 =====
+  {
+    const B = w.LT_BOT || (w.LT && w.LT.BOT);
+    const LT = w.LT;   // ⚠️ 本块局部变量：其他块各自声明了 const LT = w.LT，全局没有 LT
+    // ⚠️ 本块必须自建合并源码变量：上面 1483 行的 srcAll2 是那个块的局部变量，作用域不到这里
+    const srcAll2 = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8')
+      + '\n' + fs.readFileSync(path.join(__dirname, 'bot.js'), 'utf8');
+    if (B) {
+      // 1) 天气地名解析：时间词/动词前缀必须剥掉，否则「明天上海」会整段当地名去 geocode
+      //    真因：原正则 /([\u4e00-\u9fa5]{2,8}?)(?:的)?(?:天气|...)/ 会把「明天上海」整个吃掉
+      const cases = [
+        ['明天上海天气', '上海'], ['今天北京天气', '北京'], ['上海天气', '上海'],
+        ['帮我查一下 深圳 天气', '深圳'], ['广州今天多少度', '广州'], ['明天上海会不会下雨', '上海'],
+      ];
+      cases.forEach(([q, want]) => {
+        const hit = B.parseCity ? B.parseCity(q) : '(未导出 parseCity)';
+        log(hit === want, `天气解析「${q}」→ ${want}`, '实际=' + hit);
+      });
+      log(/CITY_PRE/.test(botSrc) && /CITY_POST/.test(botSrc) && /function parseCity/.test(botSrc),
+        '天气解析内置时间词双向剥离（CITY_PRE + CITY_POST + parseCity）');
+
+      // 2) 重复回复：同一条消息必须只回一次（曾一条消息回两次天气，相隔 29 秒）
+      //    真因：sendMsg 本地调一次 + tick 轮询拉回同一条又调一次
+      log(/BOT_REPLIED/.test(srcAll2) && /function botDedupe/.test(srcAll2),
+        'maybeBotReply 增加按消息 id 去重（BOT_REPLIED + botDedupe）');
+      log(/if \(!botDedupe\(m\.conv, m\.id\)\) return;/.test(srcAll2),
+        'maybeBotReply 在调用 botReply 前做去重守卫');
+
+      // 3) 联网问答意图：必须排在 chat 兜底之前，否则「查一下/教程/怎么用」全被闲聊吞掉
+      const ids = (B.INTENTS || []).map((x) => x.id);
+      log(ids.indexOf('lookup') >= 0, '新增 lookup 意图（联网问答/教程/文档）', ids.join(','));
+      log(ids.indexOf('lookup') < ids.indexOf('chat'),
+        'lookup 意图排在 chat 兜底之前（否则永远命中不到）');
+      const lk = (B.INTENTS || []).filter((x) => x.id === 'lookup')[0];
+      log(!!lk && ['fetch 教程', 'linux 查找文件', '怎么用 tar', '解释一下什么是协程', '总结一下这篇文章', '什么是协程']
+        .every((s) => lk.k.test(s)),
+        'lookup 能命中教程/命令/解释/总结类表达',
+        lk ? ['fetch 教程', 'linux 查找文件', '怎么用 tar'].filter((s) => !lk.k.test(s)).join(',') || 'ok' : 'no-lookup');
+
+      // 4) 强制联网：lookup 意图不再交给 searchNeed 猜
+      log(/plan\.id === 'lookup'/.test(botSrc) && /var forced = /.test(botSrc),
+        'runGen 对 lookup 意图强制联网（不依赖 searchNeed 猜）');
+      log(/plan\.id/.test(botSrc) && /return \{ __gen: true, id: it\.id/.test(botSrc),
+        'botAnswer 把意图 id 带进 __gen 计划对象');
+
+      // 5) 检索词清洗：不能把「@小美 查一下」整句丢给维基
+      //    ⚠️ 踩过：`@小美` 换成空格后字符串带**前导空格**，`^` 锚定会失配 → 指令词剥不掉。
+      //       必须先归并空白再剥，且前缀可叠用（「麻烦你帮我查一下 X」）
+      if (B.sanitizeQuery) {
+        log(B.sanitizeQuery('@小美 查一下 HTTP 状态码') === 'HTTP 状态码',
+          'sanitizeQuery 剥掉指令词，只留检索关键词', B.sanitizeQuery('@小美 查一下 HTTP 状态码'));
+        log(B.sanitizeQuery('麻烦你帮我查一下 tar 怎么用') === 'tar 怎么用',
+          'sanitizeQuery 支持叠加前缀（麻烦你+帮我+查一下）', B.sanitizeQuery('麻烦你帮我查一下 tar 怎么用'));
+        log(B.sanitizeQuery('帮我搜一下 js 闭包') === 'js 闭包',
+          'sanitizeQuery 剥掉「帮我搜一下」', B.sanitizeQuery('帮我搜一下 js 闭包'));
+      } else log(false, 'sanitizeQuery 已导出');
+
+      // 6) 模型回退链：首选失败要换下一个，而不是直接扔「卡了一下」
+      log(/LLM_RETRY/.test(botSrc) && /s\.llmQueue/.test(botSrc),
+        'callLLM 建立多模型回退链（llmQueue + LLM_RETRY）');
+      log(/function next\(lastErr\)/.test(botSrc),
+        'callLLM 失败后按候选链依次重试');
+      log(/LLM_TIMEOUT = 30000/.test(botSrc),
+        'LLM_TIMEOUT 从 45s 降到 30s（用户更快看到结果或兜底）');
+
+      // 6.5) ⚠️⚠️ 真凶回归：ensureLLM 必须缓存 Promise，不能缓存布尔值
+      //   原实现 `if (s.llmTried) return Promise.resolve();` 在并发第二次调用时
+      //   会「立即 resolve 但 llmModel 还是 null」→ runGen 秒回 {fallback:true}
+      //   → 用户看到「哎呀我这边卡了一下」（模型明明可用，30 个都能列出来）
+      //
+      //   ⚠️ 断言必须先剥注释：源码注释里就写着 `s.llmTried` 这段历史（说明成因），
+      //      直接 `/s\.llmTried/` 会被自己的注释绊倒 → 假 FAIL（踩过）
+      const botCode = botSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+      log(!/s\.llmTried/.test(botCode) && /if \(s\.llmReady\) return s\.llmReady/.test(botCode),
+        'ensureLLM 缓存 Promise 而非布尔值（修并发竞态：曾导致 1 秒秒回「卡了一下」）',
+        /s\.llmTried/.test(botCode) ? '代码里还有 llmTried' : 'ok');
+
+      if (B.ensureLLM) {
+        const savedQ = LT.S.llmQueue, savedR = LT.S.llmReady, savedM = LT.S.llmModel;
+        delete LT.S.llmReady; LT.S.llmModel = null; LT.S.llmQueue = null;
+        const r = B.ensureLLM();
+        // ⚠️ 必须 await：models.list() 在测试桩里是异步 Promise，
+        //    llmQueue / llmModel 要等微任务跑完才被填充。同步断言必然拿到 null（踩过）
+        if (r && r.then) await r.catch(() => {});
+        log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue[0] === 'deepseek-v4.1-flash',
+          'ensureLLM 生成候选队列（队首仍是 deepseek-v4.1-flash）',
+          Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.join('>') : String(LT.S.llmQueue));
+        log(Array.isArray(LT.S.llmQueue) && LT.S.llmQueue.length >= 2,
+          '候选队列含多个模型（保证有回退目标）',
+          Array.isArray(LT.S.llmQueue) ? LT.S.llmQueue.length : 0);
+        log(LT.S.llmModel === 'deepseek-v4.1-flash',
+          'await 之后 llmModel 已就绪（不再是 null → 不会秒回「卡了一下」）', String(LT.S.llmModel));
+
+        // 并发：第二次调用必须复用同一个 Promise（不再是「立即 resolve 的空 Promise」）
+        const callsBefore = __llmListCalls;
+        const r2 = B.ensureLLM();
+        log(r2 === r || r2 === LT.S.llmReady, '并发第二次 ensureLLM 复用同一个 Promise（不是立即 resolve 的空 Promise）');
+        log(__llmListCalls === callsBefore, '并发调用不重复拉模型目录',
+          'delta=' + (__llmListCalls - callsBefore));
+        // 并发场景的真实验证：清空后同一 tick 内连调两次，第二次 await 后必须拿到模型
+        delete LT.S.llmModel; LT.S.llmQueue = null; delete LT.S.llmReady;
+        const p1 = B.ensureLLM(), p2 = B.ensureLLM();
+        await Promise.all([p1, p2]);
+        log(p1 === p2 && LT.S.llmModel === 'deepseek-v4.1-flash',
+          '⚠️ 并发两次 ensureLLM：第二个不再是「立即 resolve 空 Promise」，await 后模型已就绪',
+          'same=' + (p1 === p2) + ' model=' + String(LT.S.llmModel));
+        LT.S.llmQueue = savedQ; LT.S.llmReady = savedR; LT.S.llmModel = savedM;
+      } else log(false, 'ensureLLM 已导出');
+
+      // 7) 新闻源全挂时不再直接报错，退化为「联网检索 + 模型总结」
+      log(/function botNewsFallback/.test(botSrc),
+        '新闻/热点增加联网检索兜底（botNewsFallback）');
+      log(/botNewsFallback\('news'\)/.test(botSrc) && /botNewsFallback\('hot'\)/.test(botSrc),
+        'botNews/botHot 全源失败时走兜底而不是直接报错');
+      log(!/新闻源今天集体打不通了/.test(botSrc),
+        '删除「新闻源今天集体打不通了」的硬报错文案（改为有内容可给）');
+    } else {
+      log(false, 'window.LT_BOT 已导出（小美回归测试依赖它）');
     }
   }
 

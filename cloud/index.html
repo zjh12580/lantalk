@@ -6,7 +6,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
 <!-- 小美模块：人格/情绪/意图注册表/记忆/模型调用。⚠️ 改小美请直接改 bot.js。
      ?v= 是缓存一致性用的版本号，每次改 bot.js 必须同步改这里（否则浏览器/CDN 会吃旧缓存）。 -->
-<script src="bot.js?v=1"></script>
+<script src="bot.js?v=2"></script>
 <title>Let's Talk · 云端聊天</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2307c160'/%3E%3Cpath d='M14 32 L50 16 L40 50 L32 38 L14 32 Z' fill='white'/%3E%3C/svg%3E">
 <style>
@@ -1008,6 +1008,21 @@ function botLeader(conv) {
 }
 // 判断某条消息是否需要小美接话：只有「被 @」或「私聊小美」才回
 // ⚠️ 已移除「6 秒无人回复则兜底代发」逻辑：那是小美的主动行为，且多端在线时会重复发言
+// ⚠️⚠️ 必须按消息 id 去重：同一条消息可能被两条路径触发 ——
+//   ① sendMsg 本地立即调一次；② tick() 轮询把我自己发的消息拉回来再调一次
+//   （tick 的 `gt('id', S.lastId)` 查询在 Promise.all 发出时 lastId 还是旧值，
+//    回来时 S.lastId 未必已推进 → 同一条消息进 onNew 两次）
+//   曾因此「@小美 上海天气」一条消息回了两次天气（相隔 29 秒）。
+var BOT_REPLIED = {};   // { conv|msgId: ts }，只做去重标记，定期清理
+function botDedupe(conv, id) {
+  var key = conv + '|' + id;
+  if (BOT_REPLIED[key]) return false;
+  BOT_REPLIED[key] = Date.now();
+  // 顺手清理 10 分钟前的标记，避免无限增长
+  var cut = Date.now() - 10 * 60 * 1000;
+  for (var k in BOT_REPLIED) { if (BOT_REPLIED[k] < cut) delete BOT_REPLIED[k]; }
+  return true;
+}
 function maybeBotReply(m) {
   if (!m || !m.conv || m.sender_id === BOT.id) return;
   if (m.type !== 'text' || !m.text) return;
@@ -1016,6 +1031,7 @@ function maybeBotReply(m) {
   var isBotChat = c.type === 'private' && c.id === BOT.id;
   var atBot = (m.mentions || []).indexOf(BOT.id) >= 0;
   if (!isBotChat && !atBot) return;
+  if (!botDedupe(m.conv, m.id)) return;   // 同一条消息只回一次
   var who = m.sender_name || ((S.profiles[m.sender_id] || {}).nickname || '');
   if (!botLeader(m.conv)) return;   // 多端在线时只让 leader 回复，避免人人代发
   botReply(m.conv, m.text, who);
