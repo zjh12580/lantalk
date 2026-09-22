@@ -748,6 +748,8 @@ var HALL_AVATAR = { emoji: '🏛️', color: '#07c160' };
 var S = {
   uid: null, me: null, profiles: {}, groups: [], members: {}, friends: [], reqs: [],
   convs: [], cur: null, msgs: {}, lastId: 0, reads: {}, readsAll: {}, unread: {}, urls: {},
+  histLoaded: {},       // 会话 -> 是否已成功拉过一次云端历史（不能用 msgs[conv] 是否存在代替）
+  impLoaded: {},        // 会话 -> 是否已导入过本地聊天记录（需与云端合并，每次进会话都重拉）
   anim: {},             // 会话 -> 本次要播放入场动画的消息 id 集合（仅新消息，重渲染不闪）
   seenReqs: {}, seenFriends: {},
   reply: null, filter: 'all', q: '', info: false, theme: 'dark', sound: true,
@@ -1622,6 +1624,13 @@ function ensureBot() {
     S.profiles[BOT.id].avatar = BOT.avatar;   // 形象升级后同步旧数据
   }
   if (S.members && S.members.hall && S.members.hall.indexOf(BOT.id) < 0) S.members.hall.push(BOT.id);
+  // 小美在**所有群**里（不只大厅）：@ 列表、群成员面板、已读人头统计都要能认到她。
+  // 不补的话，非大厅群的 @ 列表会漏掉小美（只靠 atCandidates 兜底会让成员面板也不一致）。
+  if (S.members) {
+    Object.keys(S.members).forEach(function (gid) {
+      if (Array.isArray(S.members[gid]) && S.members[gid].indexOf(BOT.id) < 0) S.members[gid].push(BOT.id);
+    });
+  }
   syncBotAvatarToDB();
 }
 // 把正确形象写回数据库（每会话最多一次）：数据库里小美那行可能存着旧垫边图，
@@ -2536,8 +2545,11 @@ function openConv(conv) {
   c.atMe = false;
   renderConvs();
   if (S.info) renderInfo();
-  // 会话里混有「读取聊天记录」导入的本地历史时，仍要拉一次云端，合并出完整视图
-  if (!S.msgs[conv] || (S.impLoaded || {})[conv]) return loadHistory(conv);
+  // ⚠️ 判定「是否已拉过历史」必须用显式标记，**不能用 S.msgs[conv] 是否存在**：
+  //    实时推送/轮询的 pushMsg 会先把数组建出来（可能只含 1 条最新消息），
+  //    若按「数组非空」跳过 loadHistory，就会只剩那条最新消息（用户报的「聊天记录没加载到」）。
+  //    同理，(S.impLoaded||{})[conv] 命中时也要重新拉，才能把导入的本地历史与云端合并成完整视图。
+  if (!(S.histLoaded || {})[conv] || (S.impLoaded || {})[conv]) return loadHistory(conv);
   renderMsgs('bottom'); markRead(conv);
 }
 function loadHistory(conv, before) {
@@ -2553,9 +2565,16 @@ function loadHistory(conv, before) {
     if (!before && keep.length) S.msgs[conv].sort(function (a, b) { return (Number(a.id) || 0) - (Number(b.id) || 0); });
     S.more[conv] = rows.length === 40;
     rows.forEach(trackRecent);   // 补齐 recent，避免未读/预览缺失
+    // 只有「首屏加载成功」才记为已拉过历史（分页 before 不算）：
+    // 失败时不能标记，否则下次进会话就不会再拉了 → 永远只剩残缺消息。
+    if (!before) { S.histLoaded = S.histLoaded || {}; S.histLoaded[conv] = 1; }
     renderMsgs(before ? 'keep' : 'bottom');
     if (!before) { markRead(conv); buildConvs(); renderConvs(); }
-  }).catch(function (e) { toast('加载失败：' + (e.message || e), 'err'); });
+  }).catch(function (e) {
+    // 拉取失败 → 撤销「已加载」标记，下次进会话能重试（否则永久只剩残缺消息）
+    if (S.histLoaded) delete S.histLoaded[conv];
+    toast('加载失败：' + (e.message || e), 'err');
+  });
 }
 S.more = {};
 function markRead(conv) {
@@ -3443,6 +3462,10 @@ window.LT = {
   get GG() { return GG; },
   get GX() { return GX; },
   get S() { return S; },
+  // 供测试断言 @ 候选列表始终含小美（不依赖 S.members 是否已同步）
+  atCandidates: function () { return atCandidates(); },
+  cm: function () { return cm(); },
+  get BOT() { return BOT; },
   // 供测试断言游戏渲染分支（非发起方「清扫中」等）
   renderRoom: function () { return renderRoom(); },
   openRoom: function (id) { return openRoom(id); },
@@ -3873,9 +3896,15 @@ function placePop(pop, btn, align) {
 function atCandidates() {
   var c = cm()[S.cur];
   if (!c || c.type !== 'group') return [];
-  return (S.members[c.id] || []).map(function (u) {
-    var p = S.profiles[u] || {};
-    return { u: u, name: (p.nickname || '') , self: u === S.uid };
+  // ⚠️ 必须把小美**显式并入**候选：ensureBot() 异步只在拉完数据后把她补进 members，
+  //    且历史上只补 S.members.hall —— 非大厅群永远没有她；
+  //    首次进群时 ensureBot 可能还没跑完 → 表现为「第一次 @ 没有小美，再 @ 一次就有」。
+  //    这里不依赖 S.members 是否已同步，直接拼上（真实成员 + 小美）。
+  var ids = (S.members[c.id] || []).slice();
+  if (ids.indexOf(BOT.id) < 0) ids.push(BOT.id);
+  return ids.map(function (u) {
+    var p = (u === BOT.id) ? { nickname: BOT.name } : (S.profiles[u] || {});
+    return { u: u, name: (p.nickname || ''), self: u === S.uid };
   }).filter(function (x) { return x.name; });
 }
 // 渲染 @ 成员浮层；kw 为空 = 全部成员

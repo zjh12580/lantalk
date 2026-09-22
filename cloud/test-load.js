@@ -1786,6 +1786,50 @@ function makeStub() {
       log(D.querySelector('#mpop').classList.contains('hidden'), '私聊里输入 @ 不弹成员列表');
       inp2.value = ''; inp2.dispatchEvent(new w.Event('input', { bubbles: true }));
     }
+
+    // ===== 本轮修复：@ 列表必须始终含小美（非大厅群 + S.members 未同步时也不能漏）=====
+    {
+      const LT2 = w.LT;
+      const S2 = w.LT.S;
+      const botId = 'bot_xiaomei';
+      const savedCur = S2.cur, savedMembers = S2.members, savedProfiles = S2.profiles;
+      // 构造一个「非大厅群，且 members 里没有小美」的最坏场景
+      const c = w.LT.cm() ? w.LT.cm()[savedCur] : null;
+      if (c && c.type === 'group') {
+        const gid = c.id;
+        const backupList = (savedMembers[gid] || []).slice();
+        savedMembers[gid] = backupList.filter(function (u) { return u !== botId; });
+        const cands = w.LT.atCandidates();
+        log(cands.some(function (x) { return x.u === botId; }),
+          '@ 候选里始终含小美（即使 S.members 尚未同步到她）', 'cands=' + cands.length);
+        log(cands.length >= 1, '@ 候选列表非空', cands.length + ' 人');
+        savedMembers[gid] = backupList;
+      }
+      S2.cur = savedCur; S2.members = savedMembers; S2.profiles = savedProfiles;
+    }
+
+    // ===== 本轮修复：会话历史不能因「本地已有零星消息」而被跳过 =====
+    {
+      const S3 = w.LT.S;
+      const src = String(w.LT._src || '');
+      // 语义断言：openConv 的跳过条件必须是 histLoaded 标记，不能是 msgs[conv] 是否存在
+      const srcAll = S3 ? '' : '';
+      log(!!S3.histLoaded, 'S 状态里存在 histLoaded 标记（记录是否真拉过历史）');
+      log(S3.histLoaded && Object.prototype.toString.call(S3.histLoaded) === '[object Object]',
+        'histLoaded 是对象映射（conv -> 1）');
+      // 关键：修复后第一次进未拉过历史的会话，即使 msgs 里已有实时推送的零星消息，
+      // 也必须再拉一次（用标记判定，而不是数组非空判定）
+      const key = '__test_histconv__';
+      delete S3.histLoaded[key];
+      S3.msgs[key] = [{ id: 999, conv: key, text: '只有一条最新消息', sender_id: 'x' }];
+      const needLoad = !S3.histLoaded[key];
+      log(needLoad === true,
+        '本地只有零星消息时仍判定需要拉历史（不会只剩最新一条）');
+      // 拉完之后标记住，避免每次进会话都重拉
+      S3.histLoaded[key] = 1;
+      log(!!S3.histLoaded[key], '成功拉过历史后打上标记（不重复拉取）');
+      delete S3.msgs[key]; delete S3.histLoaded[key];
+    }
   }
 
   // ===== 本轮：对局浮层左右分栏（信息在左、棋盘在右）=====
@@ -1929,6 +1973,32 @@ function makeStub() {
 
     // 探活要能列出完整通道链
     log(/channels: CHANNELS\.map/.test(SJS), '/api/chat 探活返回完整通道列表');
+  }
+
+  // ===== 会话历史加载 + @ 小美：源码级回归锁（2026-09-22）=====
+  {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const IJS = fsx.readFileSync(pathx.join(__dirname, 'index.html'), 'utf8');
+
+    // @ 候选必须显式并入 BOT.id（不能只依赖 S.members，否则非大厅群漏小美）
+    log(IJS.indexOf('if (ids.indexOf(BOT.id) < 0) ids.push(BOT.id);') >= 0,
+      'atCandidates 显式并入小美（不依赖 S.members 同步）');
+    // ensureBot 要给所有群补小美，不只 hall
+    log(/Object\.keys\(S\.members\)\.forEach/.test(IJS),
+      'ensureBot 给所有群补小美（不只大厅）');
+
+    // openConv 判定「是否拉过历史」必须用 histLoaded 标记
+    log(IJS.indexOf('if (!(S.histLoaded || {})[conv]') >= 0,
+      'openConv 用 histLoaded 标记判定是否拉历史');
+    log(IJS.indexOf('if (!S.msgs[conv] || (S.impLoaded || {})[conv]) return loadHistory(conv);') < 0,
+      '旧判定（msgs 是否存在）已彻底移除，不会只剩最新消息');
+    // 只有首屏加载成功才标记；分页不算
+    log(/if \(!before\) \{ S\.histLoaded = S\.histLoaded \|\| \{\}; S\.histLoaded\[conv\] = 1; \}/.test(IJS),
+      '仅首屏加载成功才打 histLoaded 标记（分页不标记）');
+    // 失败要撤销标记，允许重试
+    log(/if \(S\.histLoaded\) delete S\.histLoaded\[conv\];/.test(IJS),
+      '拉取失败撤销 histLoaded 标记（下次进会话可重试）');
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
