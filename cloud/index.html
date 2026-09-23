@@ -3668,6 +3668,13 @@ document.addEventListener('click', function (e) {
   if (!t.closest('#mpop') && !t.closest('#pPill')) $('#mpop').classList.add('hidden');
   if (!t.closest('#spop') && !t.closest('#bSet')) $('#spop').classList.add('hidden');
   if (!t.closest('#cmdpop') && !t.closest('#bCmd')) $('#cmdpop').classList.add('hidden');
+  // 窄屏(<=900px)下 .info 是右侧滑入抽屉，点外部关闭；宽屏它是常驻侧栏面板，点外部不关
+  // ⚠️ 必须排除弹窗/modal：确认框、备注输入框挂在 body 下，不排除会把它们的点击链路打断
+  // ⚠️ 必须有 innerWidth 判断：否则宽屏点任何地方都会把常驻信息面板关掉（反直觉 + 打断交互）
+  if (S.info && window.innerWidth <= 900 && !t.closest('#info') && !t.closest('#bInfo')
+      && !t.closest('#modal') && !t.closest('.pop')) {
+    $('#info').classList.add('hidden'); S.info = false;
+  }
 });
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape' || e.key === 'Esc') { closePops(); closeModal(); closeViewer(); }
