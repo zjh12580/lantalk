@@ -2121,6 +2121,81 @@ function makeStub() {
       'System Prompt 明确禁止给回复加自己的名字前缀');
   }
 
+  // ===== 联网优先（非常识必搜） + 象棋将军提示（2026-09-23）=====
+  {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const AJS = fsx.readFileSync(pathx.join(__dirname, 'agent.js'), 'utf8');
+    const IJS = fsx.readFileSync(pathx.join(__dirname, 'index.html'), 'utf8');
+    const LT = w.LT;
+    let AG = null;
+    try { AG = require('./agent.js'); } catch (e) { AG = null; }
+
+    // ---- 改动1：除常识外，小美优先走联网推理 ----
+    log(AJS.indexOf('function isCommonSense') >= 0, 'agent 内置「是否常识题」判定 isCommonSense');
+    log(AJS.indexOf('if (!isCommonSense(text) && req.web !== false)') >= 0,
+      'runAgent 对非常识问题先做一轮预检索（联网优先，不靠模型自觉）');
+    log(AJS.indexOf("messages.push({ role: 'system', content: buildWebBrief(rows) })") >= 0,
+      '预检索结果以【联网资料】注入系统上下文');
+    log(AJS.indexOf('const FORCE_SEARCH_RULES') >= 0 && AJS.indexOf('const SKIP_SEARCH_RULES') >= 0,
+      '先判必搜信号、再判免搜清单（避免「你好+天气」被寒暄规则吞掉）');
+    log(AJS.indexOf('默认先查后答') >= 0, 'System Prompt 写明「默认先查后答」');
+    if (AG && AG.isCommonSense) {
+      log(AG.isCommonSense('你好') === true, '常识/寒暄不触发联网（你好）');
+      log(AG.isCommonSense('谢谢啦') === true, '常识/寒暄不触发联网（谢谢）');
+      log(AG.isCommonSense('你是谁') === true, '关于小美自身的问句不触发联网');
+      log(AG.isCommonSense('帮我写一首诗') === true, '主观创作不触发联网');
+      log(AG.isCommonSense('1+2*3') === true, '纯算式不触发联网');
+      log(AG.isCommonSense('今天北京天气怎么样') === false, '天气类问题必须联网');
+      log(AG.isCommonSense('最新的人工智能新闻') === false, '时效类问题必须联网');
+      log(AG.isCommonSense('英伟达股价现在多少') === false, '事实/数据类问题必须联网');
+      log(AG.isCommonSense('你好，今天股市行情怎么样') === false, '寒暄+时效：按必搜处理（先判必搜再判免搜）');
+    } else log(false, 'agent.js 导出 isCommonSense');
+    if (AG && AG.searchQueryOf) {
+      log(AG.searchQueryOf('@小美 北京天气') === '北京天气', 'searchQueryOf 剥掉 @提及噪声',
+        AG.searchQueryOf('@小美 北京天气'));
+      log(AG.searchQueryOf('#新闻 今天的热点') === '今天的热点', 'searchQueryOf 剥掉 #指令噪声',
+        AG.searchQueryOf('#新闻 今天的热点'));
+    } else log(false, 'agent.js 导出 searchQueryOf');
+
+    // ---- 改动2：象棋不限制走子 + 将军提示双方 ----
+    log(IJS.indexOf('moves: function (board, r, c) { return GX.rawMoves(board, r, c); }') >= 0,
+      '象棋 moves 不再过滤自陷将军（被将军也能自由走子）');
+    log(IJS.indexOf('var check = !win && GX.inCheck(b, opp);') >= 0,
+      'place 额外返回 check（将军只是提示，不再限制走法）');
+    log(IJS.indexOf('function xqCheckSide') >= 0,
+      'xqCheckSide 从 board+turn 派生将军状态（不写库，双方天然一致）');
+    log(IJS.indexOf("hint.classList.add('warn')") >= 0, '被将军时状态条给红色告警文案');
+    log(IJS.indexOf("toast(chk === (mine ? 1 : 2) ?") >= 0,
+      '将军时双方都会收到 toast（走子方与等待方各看到一句）');
+    if (LT && LT.GX) {
+      const GXe = LT.GX;
+      const mk = function (pairs) { const b = []; for (let i = 0; i < 90; i++) b.push(0); pairs.forEach((p) => { b[p[0] * 9 + p[1]] = p[2]; }); return b; };
+      // 黑将 (0,4) 与红车 (0,0) 同行照面 → 黑被将军；黑马在 (5,0) 仍有走法
+      const b1 = mk([[0, 4, -7], [0, 0, 3], [9, 4, 7], [5, 0, -4]]);
+      log(GXe.inCheck(b1, 2) === true, '构造局面：黑将被红车照面将军');
+      const mv1 = GXe.moves(b1, 5, 0);
+      log(mv1.length > 0, '被将军的一方仍有可走步数（不再被限制）', mv1.length);
+      log(mv1.some((m) => m[0] !== 0), '不能解将的走法也保留（将军只提示、不限制）');
+      // 红车 (1,0) → (0,0) 形成照面将军
+      const b2 = mk([[0, 4, -7], [1, 0, 3], [9, 4, 7]]);
+      const r2 = GXe.place(b2, 1, 0, 0, 0);
+      log(r2.ok && r2.check === true, 'place 返回 check=true（走完形成将军）');
+      // 吃将即胜：不再依赖「将死/困毙」判定
+      const b3 = mk([[0, 4, -7], [1, 4, 3], [9, 4, 7]]);
+      const r3 = GXe.place(b3, 1, 4, 0, 4);
+      log(r3.ok && r3.win === true, '吃掉将/帅即判胜（胜负不再靠将死判定）');
+      if (LT.xqCheckSide) {
+        const g = { kind: 'xiangqi', status: 'playing', turn: 'guest', board: mk([[0, 4, -7], [0, 0, 3], [9, 4, 7]]) };
+        log(LT.xqCheckSide(g) === 2, 'xqCheckSide：轮到黑方且黑将被照面 → 返回 2（黑被将军）');
+        log(LT.xqCheckSide({ kind: 'xiangqi', status: 'playing', turn: 'host', board: GXe.newBoard() }) === 0,
+          'xqCheckSide：开局未被将军 → 0');
+        log(LT.xqCheckSide({ kind: 'gomoku', status: 'playing', turn: 'host', board: [] }) === 0,
+          'xqCheckSide：非象棋/非对局中 → 0');
+      } else log(false, 'window.LT.xqCheckSide 已导出');
+    } else log(false, 'window.LT.GX 已导出');
+  }
+
   // ===== 会话历史加载 + @ 小美：源码级回归锁（2026-09-22）=====
   {
     const fsx = require('fs');

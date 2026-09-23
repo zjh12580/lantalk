@@ -266,6 +266,7 @@ var S = {
   //   否则从 A 局退出时带着选中的棋子进 B 局，新棋盘的同一个坐标上可能是对方的
   //   子甚至空格，点一下目标格就直接用旧坐标走子（走非法步或直接吃掉自己人）。
   xqSel: null,
+  xqChkSeen: '',         // 已提示过的「将军」状态指纹（避免每次轮询重复弹 toast）
   atList: [],            // @ 成员候选列表（输入 @ 时弹出）
   atIdx: 0,              // @ 候选高亮下标
   atSuppress: 0,         // @ 浮层抑制截止时间戳（选中后短暂不再弹）
@@ -3290,6 +3291,8 @@ window.LT = {
   cacheGet: function (conv) { return cacheGet(conv); },
   cachePut: function (conv) { return cachePut(conv); },
   get MSG_PAGE() { return MSG_PAGE; },
+  // 供测试断言象棋「将军」判定（派生状态，双方各自算）
+  xqCheckSide: function (g) { return xqCheckSide(g); },
   // 供测试断言游戏渲染分支（非发起方「清扫中」等）
   renderRoom: function () { return renderRoom(); },
   openRoom: function (id) { return openRoom(id); },
@@ -3840,6 +3843,16 @@ var GAME_KINDS = {
 var GAME_TTL = 10 * 60 * 1000;      // 邀请有效期 10 分钟
 function gid() { return 'gm_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 function gameOf(id) { return S.games[id] || null; }
+// 象棋：当前「正被将军」的一方（1=红/2=黑），0 = 没被将军。
+// 轮到谁走 = 谁刚被对方走了一步，所以只需检查 turn 那一方。
+// ⚠️ 这是**纯派生**状态：不写库，双方各自从 board+turn 算出来，天然一致。
+function xqCheckSide(g) {
+  if (!g || g.kind !== 'xiangqi' || g.status !== 'playing') return 0;
+  var b = (g.board && g.board.length === 90) ? g.board : null;
+  if (!b) return 0;
+  var side = g.turn === 'host' ? 1 : 2;    // 红先 → 房主是红方
+  return GX.inCheck(b, side) ? side : 0;
+}
 // ⚠️ 这里曾是「发起人自己不用点加入」的判定函数 gameJoinable(g, msg)。
 // 实际渲染路径 gameInviteHtml() 用 g.hostId === S.uid 自行判断（见下方），该函数从无调用点，已删除。
 // 邀请卡片渲染（三种形态：可加入 / 抢占失败 / 已结束）
@@ -4188,19 +4201,11 @@ var GX = {
     }
     return false;
   },
-  // 合法走法（已过滤自陷将军）
-  moves: function (board, r, c) {
-    var v = board[GX.idx(r, c)];
-    if (!v) return [];
-    var me = GX.side(v), raw = GX.rawMoves(board, r, c), legal = [];
-    for (var i = 0; i < raw.length; i++) {
-      var nb = board.slice();
-      nb[GX.idx(r, c)] = 0;
-      nb[GX.idx(raw[i][0], raw[i][1])] = v;
-      if (!GX.inCheck(nb, me)) legal.push(raw[i]);
-    }
-    return legal;
-  },
+  // 合法走法：⚠️ 需求变更（2026-09-23）—— **不再过滤「自陷将军」**。
+  //   以前会把「走完自己仍/变成被将军」的走法剔掉，结果被将军时经常无棋可走、甚至被判负；
+  //   现在被将军也照走不误，胜负**只以吃掉将/帅判定**（见 place）。
+  //   inCheck 内部仍走 rawMoves（避免递归），因此这里等于 rawMoves。
+  moves: function (board, r, c) { return GX.rawMoves(board, r, c); },
   hasLegalMove: function (board, side) {
     for (var i = 0; i < 90; i++) {
       if (GX.side(board[i]) !== side) continue;
@@ -4221,9 +4226,11 @@ var GX = {
     var opp = v > 0 ? 2 : 1;
     var kp = GX.kingPos(b, opp);
     var win = false;
-    if (!kp) win = true;                                  // 吃掉将/帅
-    else if (!GX.hasLegalMove(b, opp)) win = true;        // 将死 / 困毙
-    return { ok: true, board: b, win: win, from: [fr, fc], to: [tr, tc] };
+    if (!kp) win = true;                                  // 吃掉将/帅 = 胜
+    else if (!GX.hasLegalMove(b, opp)) win = true;        // 对方一个子都动不了（困毙）
+    // ⚠️ 将军只是提示，不再限制任何走法（上面已经不做自陷将军过滤）
+    var check = !win && GX.inCheck(b, opp);
+    return { ok: true, board: b, win: win, check: check, from: [fr, fc], to: [tr, tc] };
   },
 };
 
@@ -4325,11 +4332,13 @@ function openRoom(id) {
   }
   el.classList.remove('hidden');
   S.xqSel = null;        // 换局即清选中态（见 S.xqSel 说明）：旧坐标对新棋盘无意义
+  S.xqChkSeen = '';      // 换局也清「将军已提示」指纹，进新局还能重新提示
   renderRoom();
 }
 function closeRoom() {
   S.gameOpen = null;
   S.xqSel = null;
+  S.xqChkSeen = '';
   var el = $('#groom'); if (el) el.classList.add('hidden');
   stopLeaveCountdown();
   renderMsgs();
@@ -4347,6 +4356,14 @@ function renderRoom() {
   var iWin = g.status === 'over' && g.winner === S.uid;
   var otherLeft = g.status === 'left';
   var meta = BOARD_META[g.kind] || BOARD_META.gomoku;
+  // 象棋「将军」提示：状态是派生出来的，双方轮询到同一份 board+turn 都会各自弹出一次
+  // （指纹里带 moves 长度，保证每走一步最多提示一次，不会每次轮询狂弹）
+  var chk = xqCheckSide(g);
+  var chkKey = chk + ':' + ((g.moves || []).length);
+  if (chk && S.xqChkSeen !== chkKey) {
+    S.xqChkSeen = chkKey;
+    toast(chk === (mine ? 1 : 2) ? '♟️ 将军！你的老将危险了' : '♟️ 将军！对方被将军');
+  } else if (!chk) S.xqChkSeen = '';
   var cvCls = g.kind === 'go' ? ' class="bd-go"' : (g.kind === 'xiangqi' ? ' class="bd-xq"' : '');
   var head = '<div class="gr-top"><span class="gr-tag">' + kd.icon + ' ' + esc(kd.name) + '</span>'
     + '<div class="gr-title">' + esc(mine ? '我 vs ' + (g.guestName || '等待加入') : (g.hostName || '对方') + ' vs 我') + '</div>'
@@ -4450,26 +4467,36 @@ function bindRoom(g) {
       var rc = boardCell(cv, ev, g.kind);
       if (rc) gamePlace(rc.r, rc.c);
     };
-    var hint = $('#grHint');
-    if (hint) {
-      if (g.status === 'waiting') {
-        hint.textContent = '对方加入后即可开始落子';
-      } else {
+      var hint = $('#grHint');
+      if (hint) {
+        hint.classList.remove('warn');
         var meSide = g.hostId === S.uid ? 'host' : 'guest';
-        var myTurn = g.turn === meSide;
-        var turnName = g.turn === 'host' ? (g.hostName || '发起方') : (g.guestName || '对手');
-        if (!myTurn) {
-          hint.textContent = '⏳ ' + turnName + ' 正在思考…';
+        var mySideVal = meSide === 'host' ? 1 : 2;          // 象棋阵营：红 1 / 黑 2
+        var chkSide = xqCheckSide(g);
+        if (g.status === 'waiting') {
+          hint.textContent = '对方加入后即可开始落子';
+        } else if (chkSide) {
+          // 将军：双方都看得见的红字提示（只是提醒，不再限制走法）
+          hint.textContent = (chkSide === mySideVal)
+            ? '⚠️ 将军！你的老将危险了（仍可自由走子）'
+            : '⚠️ 将军！对方被将军';
           hint.classList.remove('brand');
-        } else if (g.kind === 'xiangqi') {
-          hint.textContent = S.xqSel ? '✅ 轮到你走子 —— 再点目标点走子（点原子取消）' : '✅ 轮到你走子 —— 先点自己的棋子';
-          hint.classList.add('brand');
+          hint.classList.add('warn');
         } else {
-          hint.textContent = '✅ 轮到你落子';
-          hint.classList.add('brand');
+          var myTurn = g.turn === meSide;
+          var turnName = g.turn === 'host' ? (g.hostName || '发起方') : (g.guestName || '对手');
+          if (!myTurn) {
+            hint.textContent = '⏳ ' + turnName + ' 正在思考…';
+            hint.classList.remove('brand');
+          } else if (g.kind === 'xiangqi') {
+            hint.textContent = S.xqSel ? '✅ 轮到你走子 —— 再点目标点走子（点原子取消）' : '✅ 轮到你走子 —— 先点自己的棋子';
+            hint.classList.add('brand');
+          } else {
+            hint.textContent = '✅ 轮到你落子';
+            hint.classList.add('brand');
+          }
         }
       }
-    }
   }
 }
 // 画布坐标 → 棋盘格（按棋种取几何参数）
@@ -4608,6 +4635,15 @@ function drawBoard(g) {
         ctx.beginPath(); ctx.arc(cx, cy, Math.min(stepX, stepY) * 0.13, 0, Math.PI * 2);
         ctx.fillStyle = '#ff4d4f'; ctx.fill();
       }
+    }
+  }
+  // 象棋：被将军的一方，给老将套一圈红环（双方都看得见的第二重提示）
+  if (kind === 'xiangqi') {
+    var cs = xqCheckSide(g);
+    var kp = cs ? GX.kingPos(board, cs) : null;
+    if (kp) {
+      ctx.beginPath(); ctx.arc(X(kp[1]), Y(kp[0]), Math.min(stepX, stepY) * 0.54, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ff4d4f'; ctx.lineWidth = 3.5; ctx.stroke();
     }
   }
 }
