@@ -2206,6 +2206,39 @@ function makeStub() {
       '往更早翻时新页拼到前面（不是追加到末尾 → 不会倒序）');
     log(IJS.indexOf('if (before && !rows.length)') >= 0, '云端翻到底时用本地导入历史兜底');
 
+    // ---- 时间线保序（用户报的「聊着聊着最新消息变成历史记录」）----
+    // 根因：catchUpScoped 每 ~10s 用 desc 拉 200 条回填，pushMsg 又直接 append，
+    // 于是窗口变成 [新…, 旧…]：最新消息被一堆历史夹在中间/上方。
+    log(IJS.indexOf('var asc = (rows || []).slice().sort(byId);') >= 0,
+      '回填结果先按 id 升序再消化（desc 返回不再倒序 push）');
+    log(IJS.indexOf('if (!isNumId(m) || lastNum === -Infinity || id > lastNum) arr.push(m);') >= 0
+      && IJS.indexOf('else { arr.push(m); arr.sort(byId); }') >= 0,
+      'pushMsg 保序：乱序到达时重排，不再无脑追加到末尾');
+    log(IJS.indexOf('if ((S.histLoaded || {})[conv] && arr.length && isNumId(m) && id < mid(arr[0])) return false;') >= 0,
+      '已加载窗口拒绝更旧的回填消息（历史只由「加载更早」分页负责）');
+    {
+      const ord = [{ id: 'local_a' }, { id: 900 }].sort(LT.byId);
+      log(ord[0].id === 900 && ord[1].id === 'local_a',
+        '本地构造消息（无数字 id）排在有 id 的消息之后（洞察卡片不会飞到历史顶上）');
+    }
+    {
+      const LT = w.LT; const S2 = LT && LT.S;
+      const c = '__order_test__';
+      S2.msgs[c] = []; S2.histLoaded = S2.histLoaded || {}; delete S2.histLoaded[c];
+      LT.pushMsg(c, { id: 900 }); LT.pushMsg(c, { id: 930 });
+      LT.pushMsg(c, { id: 905 });   // 空洞/乱序到达
+      log(S2.msgs[c].map((m) => m.id).join(',') === '900,905,930',
+        '乱序 push 后仍是升序：' + S2.msgs[c].map((m) => m.id).join(','));
+      S2.histLoaded[c] = 1;
+      const r = LT.pushMsg(c, { id: 731 });   // 回填里的旧消息
+      log(r === false && S2.msgs[c].length === 3,
+        '回填的旧消息被拦在窗口外（长度仍为 ' + S2.msgs[c].length + '）');
+      LT.pushMsg(c, { id: 910 });
+      log(S2.msgs[c].map((m) => m.id).join(',') === '900,905,910,930',
+        '窗口内空洞消息插到正确位置，不破坏时间线');
+      delete S2.msgs[c]; delete S2.histLoaded[c];
+    }
+
     // ---- 导出不能丢导入历史 ----
     log(/concat\(\(S\.localMsgs \|\| \{\}\)\[c\.conv\] \|\| \[\]\)/.test(IJS), '导出包包含导入历史桶里的消息');
   }

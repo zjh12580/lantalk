@@ -1116,12 +1116,37 @@ function q(p, tag) {
   var settled = p.then(function (r) { if (r.error) throw r.error; return r.data || []; });
   return Promise.race([settled, guard]).finally(function () { clearTimeout(to); });
 }
+// 云端/导入消息是数字 id；本地构造的（洞察卡片等 `local_xxx`）不是 —— 排序规则不同，必须区分
+function isNumId(m) { var n = Number(m && m.id); return m && m.id != null && isFinite(n); }
+// 按 id 升序（id 不是数字时用时间兜底），时间线唯一真相
+function byId(a, b) {
+  var na = isNumId(a), nb = isNumId(b);
+  // 本地构造的消息没有数字 id，一律视为「最新」排在最后：
+  // 它们的 mid() 是 0，若跟着一起比数字会排到所有历史消息前面（卡片飞到聊天记录顶上）。
+  if (na !== nb) return na ? -1 : 1;
+  if (na) { var d = mid(a) - mid(b); if (d) return d; }
+  return (Date.parse(a && a.created_at) || 0) - (Date.parse(b && b.created_at) || 0);
+}
 // 按消息 id 去重追加到某会话的消息数组，返回是否真的新增
 function pushMsg(conv, m) {
   if (!m || m.id == null) return false;
   var arr = S.msgs[conv] = S.msgs[conv] || [];
   for (var i = 0; i < arr.length; i++) { if (String(arr[i].id) === String(m.id)) return false; }
-  arr.push(m);
+  var id = mid(m);
+  // ⚠️ 已拉过首屏的会话：只接受「不早于窗口最早一条」的消息。
+  //    catchUpScoped 每 ~10s 无条件回填 200 条（desc），里面绝大多数是比当前窗口更旧的历史。
+  //    放行它们 = 把成百上千条旧话题灌进最新窗口，且因为回填是倒序到达、push 又是直接追加，
+  //    数组会变成 [最新…, 旧…] → 用户看到的正是「聊着聊着最新消息变成历史记录」。
+  //    历史归 loadHistory 分页管（往上翻才拉），回填只负责补「真·新消息」。
+  // 只拦「有数字 id 且确实更旧」的：本地构造的消息（id 形如 local_xxx）mid() 是 0，
+  // 不加这个判断会连洞察卡片一起拦掉。
+  if ((S.histLoaded || {})[conv] && arr.length && isNumId(m) && id < mid(arr[0])) return false;
+  // 保序：正常实时消息单调递增，直接追加；乱序到达（回填/补拉/空洞补齐）必须重排，
+  // 否则时间线串行 —— 这是「新消息跑到历史堆里」的直接原因。
+  var lastNum = -Infinity;
+  for (var j = arr.length - 1; j >= 0; j--) { if (isNumId(arr[j])) { lastNum = mid(arr[j]); break; } }
+  if (!isNumId(m) || lastNum === -Infinity || id > lastNum) arr.push(m);
+  else { arr.push(m); arr.sort(byId); }
   if (arr.length > 1000) arr.splice(0, arr.length - 1000);   // 兜底：每会话最多保留 1000 条，防内存无限增长
   (S.anim[conv] = S.anim[conv] || {})[m.id] = 1;   // 标记为「新消息」，仅这条播放入场动画
   return true;
@@ -1825,8 +1850,11 @@ function catchUpScoped() {
   var scope = myConvList();
   return q(db.from('messages').select('*').in('conv', scope).order('id', { ascending: false }).limit(200))
     .then(function (rows) {
+      // ⚠️ 必须按 id 升序再喂给 onNew：这条查询是 desc 返回的，
+      //    倒序逐条 push 会让窗口变成 [新…, 旧…]（历史挂到最新消息底下）。
+      var asc = (rows || []).slice().sort(byId);
       botBatchBegin();
-      (rows || []).forEach(function (m) {
+      asc.forEach(function (m) {
         if (m.id > S.lastId) S.lastId = m.id;
         onNew(m);
       });
@@ -2090,7 +2118,7 @@ function mergeById(a, b) {
     seen[k] = 1;
     out.push(m);
   });
-  out.sort(function (x, y) { return mid(x) - mid(y); });
+  out.sort(byId);
   return out;
 }
 // 导入历史里落在 [lo, hi] 区间的消息 —— 只在用户翻到那一屏时才合入
@@ -2117,7 +2145,10 @@ function cacheRead() {
 }
 function cacheGet(conv) {
   var v = cacheRead()[conv];
-  return Array.isArray(v) ? v : [];
+  // 旧版本曾在乱序状态下写过缓存（回填倒序 push 的产物），这里按 id 排一次再取最新一截，
+  // 免得首屏骨架把历史画在最新消息后面（真正的修正由随后的 loadHistory 覆盖完成）。
+  var arr = Array.isArray(v) ? v.slice().sort(byId) : [];
+  return arr.length > MSG_CACHE_MAX ? arr.slice(arr.length - MSG_CACHE_MAX) : arr;
 }
 function cachePut(conv) {
   try {
@@ -3253,6 +3284,8 @@ window.LT = {
   // 供测试断言消息分页/缓存/合并逻辑
   mergeById: function (a, b) { return mergeById(a, b); },
   mid: function (m) { return mid(m); },
+  byId: function (a, b) { return byId(a, b); },
+  pushMsg: function (conv, m) { return pushMsg(conv, m); },
   localPage: function (conv, lo, hi) { return localPage(conv, lo, hi); },
   cacheGet: function (conv) { return cacheGet(conv); },
   cachePut: function (conv) { return cachePut(conv); },
