@@ -120,7 +120,6 @@
         </div>
       </div>
       <div class="ann hidden" id="annBar"></div>
-      <div class="topicbar hidden" id="topicBar"><span id="topicTx"></span><button class="ib" id="topicClear" title="退出话题筛选">✕</button></div>
       <div class="msgs" id="mList"></div>
       <div class="compwrap">
       <div class="typ hidden" id="typBar"></div>
@@ -144,6 +143,14 @@
   </main>
   <aside class="info hidden" id="info"></aside>
   <aside class="wall hidden" id="wall"></aside>
+  <aside class="wall topicpost hidden" id="topicPost">
+    <div class="whead">
+      <button class="ib" id="tpBack" title="返回话题墙">‹</button>
+      <b id="tpTitle">#话题</b>
+      <button class="ib" id="tpClose" title="关闭">✕</button>
+    </div>
+    <div class="tpBody" id="tpBody"></div>
+  </aside>
 </div>
 
 <div class="mask hidden" id="mask"><div class="modal" id="modal"></div></div>
@@ -252,7 +259,7 @@ var S = {
   //    S.convs（每个会话都是全新对象），挂在旧对象上的标记当场丢失 ——
   //    表现就是「有人 @ 我」的侧栏高亮永远不出现（实测 atMe 恒为 undefined）。
   atMe: {},               // 会话 -> 1：有人在这条会话里 @ 了我（进会话时清除）
-  reply: null, filter: 'all', q: '', info: false, wall: false, topicFilter: null, theme: 'dark', sound: true,
+  reply: null, filter: 'all', q: '', info: false, wall: false, theme: 'dark', sound: true,
   pickAvatar: '', pickColor: '', tickCount: 0, lastBeat: 0, busy: false,
   attach: [],            // 待发送附件队列（粘贴/选择后先预览，点发送才上传）
   lastBotSaid: 0,        // 小美上次发言时间，用于防刷屏
@@ -1956,6 +1963,7 @@ function onNew(m) {
   if (added && !canRead) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;   // 未读增量（权威）
   if (added && isCurrent) renderMsgs();
   if (added && S.wall) renderWall();   // 话题墙打开时，新消息实时刷新墙
+  if (added && S.topicPost) renderTopicPost();   // 帖子详情打开时，新回复实时刷新
   if (added) maybeBotReplyQueued(m);   // 走批次队列：一轮回填里同会话只留最新一条（防刷屏）
   if (added && isLive && !canRead && !c.muted) {
     notify(c.name, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
@@ -2121,9 +2129,10 @@ function openConv(conv) {
   $('#cSub').textContent = c.type === 'group' ? c.memberCount + ' 位成员' : (onlineOf(c.id) ? '在线' : '离线');
   if (c.type === 'group' && c.announcement) { $('#annBar').classList.remove('hidden'); $('#annBar').textContent = '📢 ' + c.announcement; }
   else $('#annBar').classList.add('hidden');
-  // 话题墙按钮仅群聊可见；切会话时清除话题筛选 / 关闭墙
+  // 话题墙按钮仅群聊可见；切会话时关掉墙与帖子详情
   $('#bWall').style.display = (c.type === 'group') ? '' : 'none';
-  if (S.topicFilter || S.wall) { S.topicFilter = null; closeWall(); updateTopicBar(); }
+  if (S.topicPost) closeTopicPost();
+  if (S.wall) closeWall();
   S.unread[conv] = 0;
   delete S.atMe[conv];   // 进会话即视为已读 @ 提醒（旧写法 c.atMe=false 会被 buildConvs 重建冲掉）
   renderConvs();
@@ -2330,7 +2339,7 @@ function richText(text, mentions) {
     return s;
   }).join('');
 }
-// 聚合当前会话的话题：name / 帖子数 / 参与人数 / 封面图(首条带图消息) / 最近时间
+// 聚合当前会话的话题（小红书式：每个 #话题 是一块"笔记墙"）
 function buildTopics(conv) {
   var list = S.msgs[conv] || [], map = {};
   list.forEach(function (m) {
@@ -2341,42 +2350,138 @@ function buildTopics(conv) {
     var tm = new Date(m.created_at).getTime() || 0;
     ts.forEach(function (t) {
       var k = t.toLowerCase();
-      if (!map[k]) map[k] = { name: t, count: 0, users: {}, cover: null, last: 0 };
+      if (!map[k]) map[k] = { name: t, count: 0, users: {}, cover: null, last: 0, lastMsg: null, lastBy: null };
       var o = map[k];
       o.count++; o.users[m.sender_id] = 1;
       if (!o.cover && cover) o.cover = cover;
-      if (tm > o.last) o.last = tm;
+      if (tm > o.last) { o.last = tm; o.lastMsg = m; o.lastBy = m.sender_id; }
     });
   });
   return Object.keys(map).map(function (k) {
     var o = map[k];
-    return { name: o.name, count: o.count, users: Object.keys(o.users).length, cover: o.cover, last: o.last };
+    return { name: o.name, count: o.count, users: Object.keys(o.users).length, cover: o.cover, last: o.last, lastMsg: o.lastMsg, lastBy: o.lastBy };
   }).sort(function (a, b) { return b.count - a.count || b.last - a.last; });
+}
+// 当群里没有 #话题 时，自动汇总最近的图文消息作为「群聊发现」笔记（小红书发现页风格）
+function buildNotes(conv) {
+  return (S.msgs[conv] || []).filter(function (m) {
+    if (m.type === 'system' || m.type === 'card' || m.revoked) return false;
+    if (m.type === 'image') return true;
+    return m.text && m.text.replace(/\s/g, '').length >= 4 && m.text.indexOf('#') < 0;
+  }).slice(-30).reverse().map(function (m) {
+    return { m: m, cover: (m.type === 'image' && m.file_path) ? m.file_path : null, by: m.sender_id };
+  });
+}
+// 话题卡（小红书笔记卡：大封面 + 标题 + 摘要 + 作者 + 红色互动数）
+function wallTopicCard(t) {
+  var hue = 0; for (var i = 0; i < t.name.length; i++) hue = (hue * 31 + t.name.charCodeAt(i)) % 360;
+  var cover = t.cover
+    ? '<div class="wcover"><img src="' + esc(t.cover) + '" alt=""></div>'
+    : '<div class="wcover" style="background:linear-gradient(135deg,hsl(' + hue + ',46%,62%),hsl(' + ((hue + 40) % 360) + ',52%,57%))"><div class="wph">#' + esc(t.name.slice(0, 1)) + '</div></div>';
+  var raw = t.lastMsg ? (t.lastMsg.type === 'image' ? (t.lastMsg.text || '📷 图片笔记') : (t.lastMsg.text || '')) : '';
+  var cap = (raw || '').replace(/\s+/g, ' ').trim() || ('共 ' + t.count + ' 条讨论');
+  if (cap.length > 38) cap = cap.slice(0, 38) + '…';
+  var author = t.lastBy ? '<span class="wav">' + avOfUser(t.lastBy, 's') + '</span><span class="wn">' + esc(nameOf(t.lastBy)) + '</span>' : '';
+  return '<div class="wcard" data-topic="' + esc(t.name).replace(/"/g, '') + '">'
+    + cover
+    + '<div class="wbody"><div class="wt">#' + esc(t.name) + '</div>'
+    + '<div class="wcap">' + esc(cap) + '</div>'
+    + '<div class="wstats">💬 ' + t.count + ' 讨论 · ' + t.users + ' 人参与</div>'
+    + (author ? '<div class="wauthor">' + author + '</div>' : '')
+    + '</div></div>';
+}
+// 发现页笔记卡（无 #话题 时的兜底展示）
+function wallNoteCard(n) {
+  var s = n.m.text || 'x', hue = 0; for (var i = 0; i < s.length; i++) hue = (hue * 31 + s.charCodeAt(i)) % 360;
+  var cover = n.cover
+    ? '<div class="wcover"><img src="' + esc(n.cover) + '" alt=""></div>'
+    : '<div class="wcover" style="background:linear-gradient(135deg,hsl(' + hue + ',44%,60%),hsl(' + ((hue + 40) % 360) + ',50%,55%))"><div class="wph">' + esc((n.m.text || '📷').slice(0, 1)) + '</div></div>';
+  var cap = (n.m.text || '').replace(/\s+/g, ' ').trim(); if (cap.length > 38) cap = cap.slice(0, 38) + '…';
+  var author = '<span class="wav">' + avOfUser(n.by, 's') + '</span><span class="wn">' + esc(nameOf(n.by)) + '</span>';
+  return '<div class="wcard">' + cover
+    + '<div class="wbody"><div class="wt">' + (n.m.type === 'image' ? '📷 图片分享' : '💬 群聊动态') + '</div>'
+    + '<div class="wcap">' + esc(cap || '图片分享') + '</div>'
+    + '<div class="wauthor">' + author + '</div></div></div>';
 }
 function renderWall() {
   var c = cm()[S.cur];
   if (!c || c.type !== 'group') return;
   var bar = $('#wall');
   var topics = buildTopics(S.cur);
-  var grid = topics.map(function (t) {
-    var hue = 0; for (var i = 0; i < t.name.length; i++) hue = (hue * 31 + t.name.charCodeAt(i)) % 360;
-    var cover = t.cover
-      ? '<div class="wcover"><img src="' + esc(t.cover) + '" alt=""></div>'
-      : '<div class="wcover" style="background:linear-gradient(135deg,hsl(' + hue + ',75%,62%),hsl(' + ((hue + 38) % 360) + ',80%,55%))"><div class="wph">#' + esc(t.name.slice(0, 1)) + '</div></div>';
-    return '<div class="wtopic" data-topic="' + esc(t.name).replace(/"/g, '') + '">'
-      + cover
-      + '<div class="wmeta"><div class="wt">#' + esc(t.name) + '</div>'
-      + '<div class="wc">' + t.count + ' 条 · ' + t.users + ' 人参与</div></div></div>';
-  }).join('');
-  bar.innerHTML = '<div class="whead"><b>🏷️ 话题墙</b><span>群组热门话题</span></div>'
-    + (topics.length ? '<div class="wgrid">' + grid + '</div>'
-      : '<div class="wfoot">还没有话题～<br>在输入框输入 #话题 发起第一个吧</div>')
-    + '<div class="wfoot">在输入框输入 <b>#话题</b> 文字即可发起新话题<br>点击话题可只看该话题的消息</div>';
-  $$('#wall .wtopic').forEach(function (el) { el.onclick = function () { filterTopic(el.getAttribute('data-topic')); }; });
+  if (topics.length) {
+    bar.innerHTML = '<div class="whead"><b>🏷️ 话题墙</b><span>发现群组精彩话题</span></div>'
+      + '<div class="wgrid">' + topics.map(wallTopicCard).join('') + '</div>'
+      + '<div class="wfoot">输入框输入 <b>#话题</b> 即可发起 · 点卡片只看该话题</div>';
+  } else {
+    var notes = buildNotes(S.cur);
+    bar.innerHTML = '<div class="whead"><b>📷 群聊发现</b><span>最近分享</span></div>'
+      + (notes.length ? '<div class="wgrid">' + notes.map(wallNoteCard).join('') + '</div>'
+        : '<div class="wfoot">还没有内容～<br>发张图或聊点什么，就会出现在发现页</div>')
+      + '<div class="wfoot">输入框输入 <b>#话题</b> 可发起专属话题墙</div>';
+  }
+  $$('#wall .wcard').forEach(function (el) {
+    var t = el.getAttribute('data-topic');
+    // ⚠️ 必须 stopPropagation：否则事件冒泡到 document 的「点外部关闭抽屉」监听，
+    //    卡片此刻已随 #wall 隐藏、不在 #topicPost 内，刚打开的帖子会被判定成"点外部"而立刻关掉
+    //    （窄屏/桌面端窗口 <=900px 时表现为「点了没反应」）。
+    el.onclick = function (ev) { ev.stopPropagation(); if (t) openTopicPost(t); };
+  });
 }
+// ---------- 话题帖子：点话题 → 打开帖子详情（主帖 + 回复 + 回复框）----------
+// 话题本身就是「帖子」：带上同一个 #话题 的消息都算这条帖子下的回复，
+// 回复时自动补上 #话题，使它归入该帖子（同时照常出现在主聊天里）。
+function topicPostMsgs() {
+  return (S.msgs[S.cur] || []).filter(function (m) {
+    return m.type !== 'system' && !m.revoked &&
+      topicsOf(m.text).some(function (t) { return t.toLowerCase() === S.topicPost; });
+  });
+}
+function renderTopicPost() {
+  if (!S.topicPost) return;
+  var ms = topicPostMsgs();
+  var first = ms[0];
+  $('#tpTitle').textContent = '#' + S.topicPost;
+  var html = '';
+  if (first) {
+    var cover = (first.type === 'image' && first.file_path) ? first.file_path : '';
+    var body = (first.type === 'image') ? (first.text || '') : (first.text || '');
+    html += '<div class="tpPost">'
+      + (cover ? '<div class="tpCover"><img src="' + esc(cover) + '" alt=""></div>' : '')
+      + '<div class="tpAuthor">' + avOfUser(first.sender_id, 's') + '<span>' + esc(nameOf(first.sender_id)) + '</span></div>'
+      + (body ? '<div class="tpText">' + richText(body) + '</div>' : '')
+      + '</div>';
+  } else {
+    html += '<div class="tpEmpty">这条话题还没有内容</div>';
+  }
+  html += '<div class="tpRh">💬 ' + ms.length + ' 条讨论</div>';
+  html += ms.map(function (m) {
+    var tx = (m.type === 'image') ? '📷 图片' : richText(m.text);
+    return '<div class="tpRe">' + avOfUser(m.sender_id, 's')
+      + '<div class="tpReB"><div class="tpReN">' + esc(nameOf(m.sender_id)) + '</div>'
+      + '<div class="tpReT">' + tx + '</div></div></div>';
+  }).join('');
+  $('#tpBody').innerHTML = html;
+}
+function openTopicPost(name) {
+  if (!name) return;
+  var c = cm()[S.cur];
+  if (!c || c.type !== 'group') { toast('话题墙仅群聊可用'); return; }
+  S.topicPost = String(name).toLowerCase();
+  S.wall = false;
+  $('#wall').classList.add('hidden');
+  $('#topicPost').classList.remove('hidden');
+  renderTopicPost();
+}
+function closeTopicPost() {
+  S.topicPost = null;
+  $('#topicPost').classList.add('hidden');
+}
+// 回复方式：帖子面板不放任何回复控件。在群聊主输入框里输入「内容 + #话题」
+// 即视为回复该话题（topicsOf 天然按 #话题 聚合，无需额外的回复态机制）。
 function openWall() {
   var c = cm()[S.cur];
   if (!c || c.type !== 'group') { toast('话题墙仅群聊可用'); return; }
+  closeTopicPost();                       // 墙与帖子详情互斥，避免两个抽屉同时占位
   S.wall = true;
   $('#wall').classList.remove('hidden');
   renderWall();
@@ -2384,28 +2489,6 @@ function openWall() {
 function closeWall() {
   S.wall = false;
   $('#wall').classList.add('hidden');
-}
-// 点话题卡 / 点消息里的 #话题 chip：过滤当前会话只看该话题
-function filterTopic(name) {
-  if (!name) return;
-  S.topicFilter = String(name).toLowerCase();
-  closeWall();
-  renderMsgs('keep');
-  updateTopicBar();
-}
-function clearTopic() {
-  S.topicFilter = null;
-  renderMsgs('keep');
-  updateTopicBar();
-}
-function updateTopicBar() {
-  var bar = $('#topicBar');
-  if (!S.topicFilter) { bar.classList.add('hidden'); return; }
-  var n = (S.msgs[S.cur] || []).filter(function (m) {
-    return m.type !== 'system' && !m.revoked && topicsOf(m.text).some(function (t) { return t.toLowerCase() === S.topicFilter; });
-  }).length;
-  $('#topicTx').textContent = '正在查看 #' + S.topicFilter + ' · ' + n + ' 条';
-  bar.classList.remove('hidden');
 }
 function renderMsgs(scroll) {
   var box = $('#mList');
@@ -2415,8 +2498,7 @@ function renderMsgs(scroll) {
   var wasAtBottom = distBefore < 80;
   var prevH = box.scrollHeight;
   var list = S.msgs[S.cur] || [];
-  // 话题筛选：只看含指定 #话题 的消息（系统消息/撤回不计入）
-  if (S.topicFilter) list = list.filter(function (m) { return m.type !== 'system' && !m.revoked && topicsOf(m.text).some(function (t) { return t.toLowerCase() === S.topicFilter; }); });
+  // 注：旧版「点话题过滤主聊天」已由「打开帖子详情 + 回复」取代，此处不再按话题裁剪消息列表
   var curConv = cm()[S.cur];   // 循环内复用：readLabel 不再每条消息重建一次会话 map
   // ⚠️ 指纹去重：轮询每 4 轮（约 10 秒）会无条件调 renderMsgs，而它要重建整个 innerHTML
   //    并重新绑定上百个事件监听。内容没变时这一轮纯属浪费（长会话下肉眼可见地卡）。
@@ -2532,7 +2614,7 @@ function renderMsgs(scroll) {
   $$('#mList .ops button').forEach(function (b) { b.onclick = function () { msgAct(b.dataset.a, b.dataset.i); }; });
   $$('#mList .rd[data-r]').forEach(function (el) { el.onclick = function () { showReadDetail(el.dataset.r); }; });
   $$('#mList .plan').forEach(function (el) { el.onclick = function (ev) { ev.stopPropagation(); planAct(el.getAttribute('data-act'), el); }; });
-  $$('#mList .topic').forEach(function (el) { el.onclick = function (ev) { ev.stopPropagation(); filterTopic(el.getAttribute('data-topic')); }; });
+  $$('#mList .topic').forEach(function (el) { el.onclick = function (ev) { ev.stopPropagation(); openTopicPost(el.getAttribute('data-topic')); }; });
   $$('#mList .mav').forEach(function (a) {
     var uid = a.dataset.u;
     if (!uid || uid === S.uid || uid === 'system') { a.style.cursor = 'default'; return; }
@@ -3137,8 +3219,11 @@ function runCmdItem(cmd) {
   closePops();
   if (c && c.arg) {
     el.value = '#'; el.placeholder = '输入股票代码或名称后回车，例如 600519 / 茅台 / 腾讯';
-    el.focus(); autoH(); S.cmdSuppress = Date.now() + 800; return;
+    el.focus(); autoH(); S.cmdSuppress = Date.now() + 800;
+    S.cmdArg = cmd;                          // 标记「正在补参数」→ 回车时判为预置指令
+    return;
   }
+  S.cmdArg = null;
   el.value = cmd; el.placeholder = DEFAULT_PH; doSend(); S.cmdSuppress = Date.now() + 800;
 }
 
@@ -3265,14 +3350,36 @@ function uploadAttach(a) {
     return { file_path: path, file_name: a.name, file_size: a.size, mime: a.file.type || '', type: a.isImg ? 'image' : 'file' };
   });
 }
+// 判定一条「以 # 开头」的输入是否命中预置指令。
+// 命中 → 走 handleHashCmd 出功能卡片；不命中 → 当作普通消息发出，自动进话题墙。
+// 规则：① 已知指令前缀（#btc/#eth/#help/#分析/#新闻/#股票，可带参数）
+//       ② 币种别名 / 6 位股票代码（含 sh/sz/bj 前缀）
+//       ③ 刚从菜单选了带参指令（S.cmdArg），正在补参数（如选 #股票 后输入 茅台）
+// 其余「# + 自由文字」（如 #周末出游）一律视为话题，发送后进入话题墙。
+function isPresetHash(text) {
+  var t = String(text || '').trim();
+  if (t.charAt(0) !== '#') return false;
+  var s = t.slice(1);
+  if (!s) return false;
+  if (/^(btc|eth|help|分析|新闻|股票)(\s|$)/i.test(s)) return true;
+  if (/^(btc|eth|bitcoin|ethereum|doge|dogecoin)$/i.test(s)) return true;
+  if (/^(sh|sz|bj)\d{6}$/i.test(s)) return true;
+  if (/^\d{6}$/.test(s)) return true;
+  if (S.cmdArg) return true;                     // 菜单里选了带参指令，正在补参数
+  return false;
+}
 function doSend() {
   var el = $('#input');
   if (!S.cur) return;
   typingStop();
   var text = el.value.replace(/\s+$/, '');
-  // 预置指令：以 # 开头不按普通消息发送，直接走行情卡片逻辑
   var t0 = text.trim();
-  if (t0.charAt(0) === '#') { el.value = ''; autoH(); closePops(); handleHashCmd(t0); return; }
+  // 只有「命中预置指令」的 # 才走卡片逻辑；其余 #xxx 按普通话题消息发送（进话题墙）
+  if (t0.charAt(0) === '#' && isPresetHash(t0)) {
+    S.cmdArg = null;
+    el.value = ''; autoH(); closePops(); handleHashCmd(t0); return;
+  }
+  S.cmdArg = null;
   var atts = S.attach.slice();
   if (!t0 && !atts.length) return;
   var mentions = detectMentions(text);
@@ -3296,6 +3403,8 @@ function doSend() {
       });
     });
   }
+  // 发出成功后刷新帖子详情（打开着的话），让新回复立刻出现在帖子里
+  chain = chain.then(function (m) { if (S.topicPost) renderTopicPost(); return m; });
   chain.catch(function (e) {
     // 内容还回输入框/附件区，别让一次网络抖动吃掉用户写的东西。
     // 已经发出去的不补回，否则用户重试会把它们再发一遍。
@@ -3618,7 +3727,8 @@ $('#bInfo').onclick = function () {
   if (S.info) renderInfo();
 };
 $('#bWall').onclick = function () { if (S.wall) closeWall(); else openWall(); };
-$('#topicClear').onclick = function () { clearTopic(); };
+$('#tpBack').onclick = function () { closeTopicPost(); openWall(); };
+$('#tpClose').onclick = function () { closeTopicPost(); };
 function renderInfo() {
   var c = cm()[S.cur];
   if (!c) return;
@@ -3966,6 +4076,13 @@ document.addEventListener('click', function (e) {
   if (S.wall && window.innerWidth <= 900 && !t.closest('#wall') && !t.closest('#bWall')
       && !t.closest('#modal') && !t.closest('.pop')) {
     $('#wall').classList.add('hidden'); S.wall = false;
+  }
+  // 窄屏下帖子详情同为右侧滑入抽屉，点外部关闭。
+  // ⚠️ 排除 #wall：话题墙卡片是打开帖子的入口，点击瞬间卡片随 #wall 隐藏、不在 #topicPost 内，
+  //    不排除就会被判成"点外部"，导致刚打开就被关掉。
+  if (S.topicPost && window.innerWidth <= 900 && !t.closest('#topicPost') && !t.closest('#wall')
+      && !t.closest('#bWall') && !t.closest('#modal') && !t.closest('.pop')) {
+    closeTopicPost();
   }
 });
 document.addEventListener('keydown', function (e) {
