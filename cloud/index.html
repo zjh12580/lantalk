@@ -79,11 +79,10 @@
   </div>
 </div>
 
-<div class="side-mask hidden" id="sideMask"></div>
 <div class="app hidden" id="app">
   <aside class="side">
     <div class="side-hd">
-      <button class="ib side-toggle" id="bSide" title="展开菜单">☰</button>
+      <b class="sd-title">聊天</b>
       <div class="me" id="meBox">
         <div class="av m" id="meAv">我</div>
         <div style="min-width:0">
@@ -100,6 +99,47 @@
     </div>
     <div class="list" id="cList"></div>
     <div class="foot"><span id="onInfo">在线 0 人</span><span style="display:flex;gap:8px;align-items:center"><span id="conn" style="color:var(--brand)">已连接</span><button class="ib" id="bSet" title="设置" aria-label="设置"><span class="sico">⚙️</span></button></span></div>
+
+    <!-- ↓↓↓ 移动端专属：联系人页 / 我的页。PC 下由全局 .pane{display:none} 隐藏，桌面布局不受影响 ↓↓↓ -->
+    <div class="pane pn-contacts" id="pnContacts">
+      <div class="pn-hd"><b>联系人</b><button class="ib" id="bContAdd" title="发起会话" aria-label="发起会话">＋</button></div>
+      <div class="pn-wrap">
+        <div class="prow" id="contReq"><span class="prow-ic">👥</span><span class="prow-tx">新的朋友</span><i class="pbadge hidden" id="contReqBadge"></i><span class="rarr">›</span></div>
+        <div class="plbl">群聊 <span id="grpCount">0</span></div>
+        <div id="contGroups"></div>
+        <div class="plbl">好友 <span id="frdCount">0</span></div>
+        <div id="contFriends"></div>
+      </div>
+    </div>
+
+    <div class="pane pn-me" id="pnMe">
+      <div class="pn-hd"><b>我</b></div>
+      <div class="pn-wrap">
+        <div class="mcard" id="mCard">
+          <div class="av l" id="mAv">我</div>
+          <div class="mb-mid">
+            <div class="mnm" id="mNm">-</div>
+            <div class="mid" id="mId">-</div>
+            <div class="msg" id="mSg">-</div>
+          </div>
+          <span class="rarr">›</span>
+        </div>
+        <div class="pgrp">
+          <div class="prow" id="mTheme"><span class="prow-tx">夜间模式</span><span class="switch" id="mThemeSw"><i></i></span></div>
+          <div class="prow" id="mBell"><span class="prow-tx">消息提示音</span><span class="switch" id="mBellSw"><i></i></span></div>
+        </div>
+        <div class="pgrp">
+          <div class="prow" id="mExp"><span class="prow-tx">导出聊天记录</span><span class="rarr">›</span></div>
+          <div class="prow" id="mImp"><span class="prow-tx">读取聊天记录</span><span class="rarr">›</span></div>
+        </div>
+        <div class="pgrp">
+          <div class="prow" id="mVer"><span class="prow-tx">版本</span><span class="pv" id="mVerTx">-</span></div>
+        </div>
+        <div class="pgrp">
+          <div class="prow danger" id="mExit"><span class="prow-tx">退出登录</span></div>
+        </div>
+      </div>
+    </div>
   </aside>
 
   <main class="chat">
@@ -110,6 +150,7 @@
     </div>
     <div class="main hidden" id="cMain">
       <div class="hd">
+        <button class="ib hd-back" id="bBack" title="返回" aria-label="返回"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
         <div class="hd-t"><span id="cName">会话</span><span class="hd-s" id="cSub"></span></div>
         <div style="display:flex;align-items:center;gap:2px">
           <span class="hd-on" id="hdOn" title="当前在线人数"><i class="doton"></i><span id="hdOnTx">在线 0 人</span></span>
@@ -152,6 +193,22 @@
     <div class="tpBody" id="tpBody"></div>
   </aside>
 </div>
+
+<!-- 移动端底部三 tab（PC 不显示，见 styles.css 的 @media(max-width:640px)） -->
+<nav class="tabbar" id="tabBar" aria-label="主导航">
+  <button class="tb" id="tbChat" data-tab="chat" aria-label="聊天">
+    <span class="tb-ic"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg><i class="tbadge hidden" id="tbChatBadge"></i></span>
+    <span class="tb-tx">聊天</span>
+  </button>
+  <button class="tb" id="tbContacts" data-tab="contacts" aria-label="联系人">
+    <span class="tb-ic"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11V8a3 3 0 0 0-3-3"/><path d="M17 21v-2a4 4 0 0 0-2-3.5"/></svg><i class="tbadge hidden" id="tbContactsBadge"></i></span>
+    <span class="tb-tx">联系人</span>
+  </button>
+  <button class="tb" id="tbMe" data-tab="me" aria-label="我的">
+    <span class="tb-ic"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 12 0v1"/></svg></span>
+    <span class="tb-tx">我</span>
+  </button>
+</nav>
 
 <div class="mask hidden" id="mask"><div class="modal" id="modal"></div></div>
 <div class="pop mpop hidden" id="mpop"></div>
@@ -2065,6 +2122,7 @@ function renderMe() {
   av.textContent = S.me.avatar || (S.me.nickname || '?').charAt(0).toUpperCase();
   av.style.background = S.me.color;
   $('#meSig').textContent = cleanSig(S.me.signature) || '在线';
+  renderMePanel();   // 「我」页的名片和这里是同一份数据，同步刷新避免两处不一致
 }
 function renderConvs() {
   var list = S.convs.slice();
@@ -2105,17 +2163,171 @@ function renderConvs() {
       if (rel) respondFriend(rel, b.dataset.a === '1');
     };
   });
+  updateTabBadge();          // 角标跟着会话列表一起刷新
 }
-// 手机端：左侧栏展开/收起（收窄后只显示头像 logo）
-function closeSide() {
-  var sd = document.querySelector('.side');
-  if (sd) sd.classList.remove('open');
-  var m = $('#sideMask');
-  if (m) m.classList.add('hidden');
+// ---------- 移动端底部三 tab（≤640px 生效；PC 是 .side+.chat 并排，下面这些自动退化为空操作） ----------
+// 层级参考微信：聊天 / 联系人 / 我 三个顶层 tab 并列；点会话再进入「详情态」tab-conv，
+// 这时 tabBar 收起、聊天页铺满，靠头部的 ‹ 回到**来源** tab —— curTab 不被改写，
+// 所以从「联系人」点好友进来的会退回联系人，而不是跳到聊天列表。
+function isNarrowSide() { return !!(window.matchMedia && window.matchMedia('(max-width:640px)').matches); }
+var curTab = 'chat';
+function switchTab(name) {
+  if (name !== 'chat' && name !== 'contacts' && name !== 'me') name = 'chat';
+  exitConvState();                    // 切 tab 必然离开详情态（含对应的 history 回退）
+  curTab = name;
+  // 显示哪个面板由 body 类驱动；这些类的响应规则全写在 @media 里，PC 端加了也不生效
+  var b = document.body.classList;
+  b.toggle('tab-chat', name === 'chat');
+  b.toggle('tab-contacts', name === 'contacts');
+  b.toggle('tab-me', name === 'me');
+  $$('#tabBar .tb').forEach(function (el) {
+    el.classList.toggle('on', el.getAttribute('data-tab') === name);
+  });
+  if (name === 'contacts') renderContacts();
+  if (name === 'me') renderMePanel();
+}
+// 聊天详情态：push 一条 history，Android 返回键 / 浏览器后退先退回来源 tab 而不是直接离开
+var tabPushed = false;
+function tabPushHistory() {
+  if (tabPushed) return;
+  try { history.pushState({ ltTab: 1 }, ''); tabPushed = true; } catch (e) {}
+}
+function enterConvState() {
+  if (!isNarrowSide()) return;        // PC 没有详情态概念，保持旧的「点了就打开」行为
+  if (convExitTimer) { clearTimeout(convExitTimer); convExitTimer = null; }   // 打断退出动画（可打断性）
+  document.body.classList.remove('conv-exit');
+  document.body.classList.add('tab-conv');
+  tabPushHistory();
+}
+// 详情页弹出：加 conv-exit 让聊天页滑出、列表从视差位滑回（与推入同路径反转），
+// 动画播完（330ms）再摘 tab-conv。reduced-motion 用户直接摘，不做位移。
+var convExitTimer = null;
+function hideConvNow() {
+  var b = document.body;
+  if (!b.classList.contains('tab-conv')) return;
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    b.classList.remove('tab-conv');
+    return;
+  }
+  b.classList.add('conv-exit');
+  convExitTimer = setTimeout(function () {
+    convExitTimer = null;
+    b.classList.remove('tab-conv', 'conv-exit');
+  }, 330);
+}
+function exitConvState() {
+  hideConvNow();
+  if (!tabPushed) return;
+  tabPushed = false;                  // 先置 false，避免 popstate 里再 back 一次形成循环
+  try { history.back(); } catch (e) {}
+}
+window.addEventListener('popstate', function () {
+  if (!tabPushed) return;             // 本次后退不是我们 push 的（用户真的要离开页面）
+  tabPushed = false;
+  hideConvNow();
+});
+// tab 角标：聊天 tab 显示未读总数；联系人 tab 与「新的朋友」行显示待处理的好友申请
+function updateTabBadge() {
+  var total = 0;
+  Object.keys(S.unread || {}).forEach(function (k) { total += (S.unread[k] || 0); });
+  setBadge('#tbChatBadge', total);
+  var pend = (S.friends || []).filter(function (f) {
+    return f.b === S.uid && f.status === 'pending';
+  }).length;
+  setBadge('#tbContactsBadge', pend);
+  setBadge('#contReqBadge', pend);
+}
+function setBadge(sel, n) {
+  var el = $(sel);
+  if (!el) return;
+  el.textContent = n > 99 ? '99+' : String(n);
+  el.classList.toggle('hidden', n <= 0);
+}
+
+// ---------- 联系人页（移动端「联系人」tab） ----------
+// 行结构直接复用会话列表的 .conv（头像 + 主标题 + 副标题），不另起一套，视觉天然一致。
+function renderContacts() {
+  var gidEl = $('#grpCount'), fidEl = $('#frdCount');
+  // 群聊：buildConvs 已按成员关系过滤过（不在群里不会出现），这里只做排序
+  var groups = (S.convs || []).filter(function (c) { return c.type === 'group' && !c.localOnly; });
+  groups.sort(function (a, b) { return String(a.name).localeCompare(String(b.name), 'zh'); });
+  $('#contGroups').innerHTML = groups.length ? groups.map(function (c) {
+    return '<div class="conv" data-c="' + esc(c.conv) + '">'
+      + convAv(c)
+      + '<div class="cbody"><div class="ctop"><span class="cnm">' + esc(c.name) + '</span></div>'
+      + '<div class="clast">' + (c.memberCount || 0) + ' 位成员</div></div></div>';
+  }).join('') : '<div class="pn-empty">还没有群聊</div>';
+  $$('#contGroups .conv').forEach(function (el) {
+    el.onclick = function () { openConv(el.dataset.c); };
+  });
+  // 好友：已接受的关系 ∪ 已有私聊会话（后者覆盖「关系已删但聊天还在」的情况）
+  var peers = {};
+  (S.friends || []).forEach(function (f) {
+    if (f.status !== 'accepted') return;
+    var pid = f.a === S.uid ? f.b : f.a;
+    if (pid) peers[pid] = 1;
+  });
+  (S.convs || []).forEach(function (c) { if (c.type === 'private' && c.id) peers[c.id] = 1; });
+  delete peers[S.uid];
+  var ids = Object.keys(peers).filter(function (pid) { return !!S.profiles[pid]; });
+  ids.sort(function (a, b) { return String(displayName(a)).localeCompare(String(displayName(b)), 'zh'); });
+  $('#contFriends').innerHTML = ids.length ? ids.map(function (pid) {
+    var p = S.profiles[pid] || {};
+    return '<div class="conv" data-u="' + esc(pid) + '">'
+      + avOf(p.nickname, p.avatar, p.color, 'm')
+      + '<div class="cbody"><div class="ctop"><span class="cnm">' + esc(displayName(pid)) + '</span></div>'
+      + '<div class="clast">' + (onlineOf(pid) ? '在线' : '离线') + '</div></div></div>';
+  }).join('') : '<div class="pn-empty">还没有好友，点右上角 ＋ 找人</div>';
+  $$('#contFriends .conv').forEach(function (el) {
+    el.onclick = function () { openConv(pconv(S.uid, el.dataset.u)); };
+  });
+  if (gidEl) gidEl.textContent = groups.length;
+  if (fidEl) fidEl.textContent = ids.length;
+}
+// 「新的朋友」：会话列表里带接受/拒绝按钮的请求行，在这里集中成一张表处理
+function openRequests() {
+  var reqs = (S.friends || []).filter(function (f) { return f.b === S.uid && f.status === 'pending'; });
+  if (!reqs.length) { toast('暂无新的好友请求'); return; }
+  openModal('<h3>新的朋友 · ' + reqs.length + ' 条</h3>' + reqs.map(function (f) {
+    var p = S.profiles[f.a] || {};
+    return '<div class="ritem" data-r="' + esc(f.a) + '">' + avOf(p.nickname, p.avatar, p.color, 's')
+      + '<div class="rib"><div class="rin">' + esc(p.nickname || '未知用户') + '</div>'
+      + '<div class="ris">想加你为好友</div></div>'
+      + '<button class="btn primary rq-ok" data-u="' + esc(f.a) + '" style="padding:4px 12px;font-size:12px">接受</button>'
+      + '<button class="btn rq-no" data-u="' + esc(f.a) + '" style="padding:4px 12px;font-size:12px">拒绝</button></div>';
+  }).join('') + '<div class="acts"><button class="btn" onclick="LT.close()">关闭</button></div>');
+  $$('#modal .ritem button').forEach(function (b) {
+    b.onclick = function (ev) {
+      ev.stopPropagation();
+      var rel = (S.friends || []).filter(function (x) {
+        return x.a === b.dataset.u && x.b === S.uid && x.status === 'pending';
+      })[0];
+      if (!rel) return;
+      LT.close();
+      respondFriend(rel, b.classList.contains('rq-ok'));
+    };
+  });
+}
+
+// ---------- 我的页（移动端「我」tab） ----------
+// 昵称 / 头像 / 签名沿用顶栏名片的取值逻辑，避免两处各渲染一套导致不一致。
+function renderMePanel() {
+  if (!$('#pnMe')) return;
+  $('#mNm').textContent = S.me.nickname || '-';
+  var av = $('#mAv');
+  if (av) {
+    av.textContent = S.me.avatar || (S.me.nickname || '?').charAt(0).toUpperCase();
+    av.style.background = S.me.color;
+  }
+  $('#mId').textContent = S.uid ? ('ID ' + String(S.uid).slice(0, 8)) : '-';
+  $('#mSg').textContent = cleanSig(S.me.signature) || '这个人很懒，什么都没写';
+  $('#mVerTx').textContent = verTag();
+  $('#mThemeSw').classList.toggle('on', S.theme === 'dark');
+  $('#mBellSw').classList.toggle('on', !!S.sound);
 }
 function openConv(conv) {
   if (!conv) return;
-  closeSide();
+  enterConvState();                   // 移动端：点会话进入聊天详情（PC 端为空操作）
   if (!cm()[conv]) {
     var p = conv.indexOf('p:') === 0 ? conv.slice(2).split('~').filter(function (u) { return u !== S.uid; })[0] : null;
     ensureConv(conv, p ? 'private' : 'group', p || conv.slice(2));
@@ -3529,8 +3741,27 @@ document.addEventListener('paste', function (e) {
 });
 
 // ---------- 弹窗 ----------
-function openModal(html) { var m = $('#modal'); m.className = 'modal'; m.innerHTML = html; $('#mask').classList.remove('hidden'); }
-function closeModal() { $('#mask').classList.add('hidden'); }
+var sheetTimer = null;
+function openModal(html) {
+  if (sheetTimer) { clearTimeout(sheetTimer); sheetTimer = null; }   // 打断未完的滑出，别把新弹窗一起关了
+  var m = $('#modal'); m.className = 'modal'; m.innerHTML = html; $('#mask').classList.remove('hidden');
+}
+function closeModal() {
+  var mask = $('#mask'), m = $('#modal');
+  // 移动端 sheet 从底部滑出（与滑入同路径）；reduced-motion 直接收
+  var narrow = window.matchMedia && window.matchMedia('(max-width:640px)').matches;
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (narrow && !reduced && m) {
+    m.classList.add('sheet-out');
+    sheetTimer = setTimeout(function () {
+      sheetTimer = null;
+      mask.classList.add('hidden');
+      m.classList.remove('sheet-out');
+    }, 300);
+  } else {
+    mask.classList.add('hidden');
+  }
+}
 window.LT = {
   close: closeModal,
   get GB() { return GB; },
@@ -3883,7 +4114,14 @@ $('#meBox').onclick = function () {
 };
 
 // 好友请求
-$('#bBell').onclick = function () { S.sound = !S.sound; $('#bBell').classList.toggle('off', !S.sound); toast(S.sound ? '提示音已开启' : '提示音已关闭'); };
+// 提示音开关：头部 🔔 和「我」页的开关共用这一段，避免两个入口各维护一份状态
+function toggleSound() {
+  S.sound = !S.sound;
+  $('#bBell').classList.toggle('off', !S.sound);
+  $('#mBellSw').classList.toggle('on', !!S.sound);
+  toast(S.sound ? '提示音已开启' : '提示音已关闭');
+}
+$('#bBell').onclick = toggleSound;
 function friendRel(pid) {
   return S.friends.filter(function (f) { return (f.a === S.uid && f.b === pid) || (f.b === S.uid && f.a === pid); })[0] || null;
 }
@@ -5049,6 +5287,7 @@ function toggleTheme() {
   S.theme = S.theme === 'dark' ? 'light' : 'dark';
   try { localStorage.setItem('lt_theme', S.theme); } catch (e) {}
   applyTheme();
+  $('#mThemeSw').classList.toggle('on', S.theme === 'dark');   // 同步「我」页的夜间模式开关
   closePops();
 }
 function applyTheme() {
@@ -5501,16 +5740,36 @@ function convPeer(c) {
   return c.conv;
 }
 
-// 手机端侧栏 ☰ / 遮罩
-var sideBtn = $('#bSide');
-if (sideBtn) sideBtn.onclick = function () {
-  var sd = document.querySelector('.side');
-  var open = sd && sd.classList.toggle('open');
-  var m = $('#sideMask');
-  if (m) m.classList.toggle('hidden', !open);
-};
-var sideMask = $('#sideMask');
-if (sideMask) sideMask.onclick = closeSide;
+// 移动端底部三 tab + 联系人页 / 我的页的交互绑定（PC 下大多是幂等空操作）
+(function bindTabBar() {
+  var bar = $('#tabBar');
+  if (!bar) return;
+  $$('#tabBar .tb').forEach(function (b) {
+    b.onclick = function () { switchTab(b.getAttribute('data-tab')); };
+  });
+  switchTab('chat');                  // 移动端默认落在「聊天」tab
+
+  // 聊天详情左上角 ‹：回到来源 tab（可能是聊天列表，也可能是联系人）
+  var bb = $('#bBack');
+  if (bb) bb.onclick = function () { switchTab(curTab); };
+
+  // 联系人页：右上角 ＋ 直接复用侧栏的「发起会话」，同一个弹窗不写两遍
+  var add = $('#bContAdd'), bNew = $('#bNew');
+  if (add && bNew) add.onclick = function () { bNew.click(); };
+  var req = $('#contReq');
+  if (req) req.onclick = openRequests;
+
+  // 我的页：名片沿用「我的资料」弹窗，设置项直接复用现有功能函数
+  var card = $('#mCard'), meBox = $('#meBox');
+  if (card && meBox) card.onclick = function () { meBox.click(); };
+  [['#mTheme', toggleTheme], ['#mBell', toggleSound],
+   ['#mExp', openExportDlg], ['#mImp', openImportDlg], ['#mExit', doExit]]
+    .forEach(function (p) { var el = $(p[0]); if (el) el.onclick = p[1]; });
+})();
+document.addEventListener('keydown', function (e) {
+  // ESC：处在聊天详情就退回来源 tab（宽屏本就没有详情态，这句自然不生效）
+  if (e.key === 'Escape' && document.body.classList.contains('tab-conv')) switchTab(curTab);
+});
 
 // ---------- 初始化 ----------
 try { S.theme = localStorage.getItem('lt_theme') || 'dark'; } catch (e) { S.theme = 'dark'; }

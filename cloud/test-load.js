@@ -1437,13 +1437,26 @@ function makeStub() {
   const tN = await botTalk('@小美 看看新闻', 3600);
   log(tN.length > 3 && tN !== '(无回复)', '「看新闻」有响应', tN.slice(0, 36).replace(/\n/g, ' '));
 
-  // ===== 本轮：手机端侧栏 ☰ / 遮罩 =====
-  log(D.querySelector('#bSide') !== null, '侧栏 ☰ 展开按钮存在（窄屏下显示）');
-  const sideEl = D.querySelector('.side');
-  D.querySelector('#bSide').click();
-  log(sideEl.classList.contains('open') && !D.querySelector('#sideMask').classList.contains('hidden'), '点 ☰ 展开侧栏并显示遮罩');
-  D.querySelector('#sideMask').click();
-  log(!sideEl.classList.contains('open'), '点遮罩收起侧栏');
+  // ===== 本轮：移动端底部三 tab（聊天 / 联系人 / 我）=====
+  log(D.querySelector('#tabBar') !== null, '底部 tabBar 存在');
+  log(D.querySelector('#bBack') !== null, '聊天头部有返回按钮 ‹');
+  const tbC = D.querySelector('#tbChat'), tbCt = D.querySelector('#tbContacts'), tbM = D.querySelector('#tbMe');
+  log(tbC !== null && tbCt !== null && tbM !== null, '聊天 / 联系人 / 我 三个 tab 都在');
+  if (tbC && tbCt && tbM) {
+    tbC.click();
+    log(tbC.classList.contains('on') && !D.body.classList.contains('tab-contacts')
+        && !D.body.classList.contains('tab-me'), '点「聊天」落在聊天列表');
+    tbCt.click();
+    log(D.body.classList.contains('tab-contacts') && tbCt.classList.contains('on'), '点「联系人」切到联系人页');
+    log(D.querySelector('#contGroups') !== null && D.querySelector('#contFriends') !== null, '联系人页含群聊/好友两个分区');
+    tbM.click();
+    log(D.body.classList.contains('tab-me') && tbM.classList.contains('on')
+        && !D.body.classList.contains('tab-contacts'), '点「我」切到我的页');
+    log(D.querySelector('#mCard') !== null && D.querySelector('#mExit') !== null, '我的页含资料卡与退出登录');
+    tbC.click();
+    log(tbC.classList.contains('on') && !D.body.classList.contains('tab-contacts')
+        && !D.body.classList.contains('tab-me'), '再切回聊天列表');
+  }
 
   // ===== 预置指令：输入 # 唤起菜单，#btc 拉取行情并渲染卡片 =====
   const hallForCmd = Array.prototype.filter.call(D.querySelectorAll('#cList .conv'), (e) => e.dataset.c === 'g:hall')[0];

@@ -17,8 +17,8 @@
 
 *,*::before,*::after{box-sizing:border-box}
 :root{--brand:#07c160;--danger:#fa5151;--at:#4a8cf7}
-body.theme-dark{--bg:#16181d;--bg2:#1d2026;--bg3:#23262d;--hover:#2a2e36;--bd:#2c3038;--tx:#e6e8eb;--tx2:#9aa0aa;--tx3:#6b7280;--bb:#262a32;--bbtx:#e6e8eb;--sd:0 8px 28px rgba(0,0,0,.45)}
-body.theme-light{--bg:#f2f3f5;--bg2:#fbfbfc;--bg3:#fff;--hover:#eceef1;--bd:#e2e5ea;--tx:#1a1d21;--tx2:#5b6270;--tx3:#9aa0aa;--bb:#fff;--bbtx:#1a1d21;--sd:0 8px 28px rgba(0,0,0,.12)}
+body.theme-dark{--bg:#16181d;--bg2:#1d2026;--bg3:#23262d;--hover:#2a2e36;--bd:#2c3038;--tx:#e6e8eb;--tx2:#9aa0aa;--tx3:#6b7280;--bb:#262a32;--bbtx:#e6e8eb;--sd:0 8px 28px rgba(0,0,0,.45);--tb-bg:rgba(38,41,48,.62);--tb-bd:rgba(255,255,255,.14);--tb-hl:rgba(255,255,255,.13);--tb-sd:0 10px 32px rgba(0,0,0,.5);--tb-pill:rgba(7,193,96,.2)}
+body.theme-light{--bg:#f2f3f5;--bg2:#fbfbfc;--bg3:#fff;--hover:#eceef1;--bd:#e2e5ea;--tx:#1a1d21;--tx2:#5b6270;--tx3:#9aa0aa;--bb:#fff;--bbtx:#1a1d21;--sd:0 8px 28px rgba(0,0,0,.12);--tb-bg:rgba(255,255,255,.66);--tb-bd:rgba(255,255,255,.8);--tb-hl:rgba(255,255,255,.9);--tb-sd:0 10px 32px rgba(0,0,0,.12);--tb-pill:rgba(7,193,96,.14)}
 html,body{height:100%;margin:0}
 body{font:14px -apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx);overflow:hidden}
 .hidden{display:none!important}
@@ -441,39 +441,157 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 }
 .hd-on{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);margin-right:10px;white-space:nowrap}
 @media(max-width:640px){.hd-on{display:none}}
-/* 手机端：左侧栏收窄只显示头像 logo，点 ☰ 或遮罩展开完整侧栏 */
-.side-toggle{display:none}
-.side-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:55}
+/* ===== 移动端底部三 tab（聊天 / 联系人 / 我）=====
+   结构参考微信：三个 tab 各是独立的全屏页面；点会话再进入聊天详情页（tab-conv），
+   此时 tabBar 收起、聊天头部出现 ‹ 返回到来源 tab。PC 保持 .side + .chat 左右并排，
+   以下规则全部关在 @media 里，桌面零影响。 */
+.tabbar{display:none}
+.pane{display:none}          /* 联系人页 / 我的页：PC 下不存在，见 @media 内才启用 */
+.hd-back{display:none}       /* 聊天头部返回按钮：PC 两端并排不需要 */
+.sd-title{display:none}      /* 「聊天」标题：只在移动端聊天 tab 出现，PC 仍是个人名片 */
 @media(max-width:640px){
-  .side{width:64px}
-  .side-hd{flex-direction:column;gap:8px;padding:10px 0}
-  .side-hd .me{padding:0}
-  .side-hd .me>div:last-child{display:none}
-  .side-hd .hd-btns{display:none}
-  .side-toggle{display:inline-flex}
-  .sRow,.foot,#sRow{display:none}
-  .list{padding:0 4px}
-  .conv{justify-content:center;padding:9px 0}
-  .conv .cbody{display:none}
-  .conv .ctm{display:none}
-  .mb{max-width:82%}
   .hd{padding:0 10px}
-  .side.open{width:280px;position:fixed;left:0;top:0;bottom:0;z-index:60;box-shadow:var(--sd);animation:sidein .18s ease}
-  .side.open .side-hd{flex-direction:row;gap:8px;padding:12px}
-  .side.open .me{flex:1;padding:4px}
-  .side.open .me>div:last-child{display:block}
-  .side.open .hd-btns{display:flex}
-  .side.open .sRow,.side.open #sRow{display:block;padding:0 12px 10px}
-  .side.open .foot{display:flex}
-  .side.open .conv{justify-content:flex-start;padding:10px 12px}
-  .side.open .conv .cbody{display:block}
-  .side.open .conv .ctm{display:block}
-  .side.open .list{padding:0}
+  .mb{max-width:82%}
+  /* 面板各占满一屏、互斥显示；显示哪家由 body 上的 tab 类决定 */
+  .app{display:block;position:relative}
+  .side,.chat{
+    position:absolute;left:0;right:0;top:0;bottom:0;
+    width:auto;                                          /* 覆盖 PC 的 290px 定宽 */
+    overscroll-behavior:contain;
+    padding-bottom:calc(86px + env(safe-area-inset-bottom));  /* 给悬浮 tabBar 让位 */
+    padding-top:env(safe-area-inset-top);
+  }
+  .side{display:flex}
+  .chat{display:none}
+  /* ===== 详情页推入/弹出（Fluid Interfaces：进出场同路径，只动 transform/opacity） =====
+     聊天页从右侧整页推入、盖在列表上方（iOS push）；列表同步左移 24% 并压暗 ——
+     这是 iOS 导航转场的标准视差。.side 不再 display:none，因此弹出时有东西可退回。 */
+  .side,.chat{transition:transform .38s cubic-bezier(.32,.72,0,1)}
+  .side::after{content:'';position:absolute;inset:0;background:#000;opacity:0;
+               pointer-events:none;transition:opacity .38s cubic-bezier(.32,.72,0,1)}
+  body.tab-conv .side{transform:translateX(-24%)}
+  body.tab-conv .side::after{opacity:.14}                       /* 压暗被盖住的列表（iOS 遮罩 scrim） */
+  body.conv-exit .side{transform:none}
+  body.conv-exit .side::after{opacity:0}
+  .chat{box-shadow:-12px 0 32px rgba(0,0,0,.16)}
+  body.tab-conv .chat{display:flex;animation:pushin .38s cubic-bezier(.32,.72,0,1);
+    /* tabBar 已收起，只留安全区：否则输入框下会空出一条 tabBar 高度的空白 */
+    padding-bottom:calc(8px + env(safe-area-inset-bottom))}
+  body.conv-exit .chat{animation:pushout .32s cubic-bezier(.32,.72,0,1) forwards}
+  @keyframes pushin{from{transform:translateX(100%)}to{transform:none}}
+  @keyframes pushout{from{transform:none}to{transform:translateX(100%)}}
+  body.tab-conv .tabbar{opacity:0;transform:translateY(120%);pointer-events:none}
+  .hd-back{display:inline-flex;flex-shrink:0;margin-left:-6px;margin-right:2px}
+  /* 移动端把 .foot（在线人数/连接状态/⚙️）整条隐藏：设置已迁到「我」页 */
+  .foot{display:none}
+  /* 聊天 tab 顶部照微信做成标题栏；名片信息移到「我」页（PC 仍保留原样子） */
+  body.tab-chat .sd-title{display:block;flex:1;font-size:17px;font-weight:600}
+  body.tab-chat .side-hd .me{display:none}
+  /* 好友请求改由「联系人 > 新的朋友」统一处理，聊天列表不再重复显示这条 */
+  body.tab-chat #cList .conv.req{display:none}
+
+  /* 联系人 / 我的页：绝对定位铺满 .side。注意 .side 的 padding 对它无效
+     （绝对定位子元素的包含块是 padding edge，含 padding 区），所以要自己避刘海和 tabBar */
+  .pane{
+    position:absolute;left:0;right:0;top:0;bottom:0;
+    display:none;flex-direction:column;
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:calc(86px + env(safe-area-inset-bottom));
+    background:var(--bg2);overscroll-behavior:contain;
+  }
+  /* 只有处在对应 tab 时才由 pane 接管画面，同时卸掉 .side 的原生内容 */
+  body.tab-contacts .pn-contacts,
+  body.tab-me .pn-me{display:flex}
+  body.tab-contacts .side-hd,body.tab-contacts #sRow,body.tab-contacts #cList,
+  body.tab-me .side-hd,body.tab-me #sRow,body.tab-me #cList{display:none}
+
+  /* tab 间切换 = iOS 式交叉淡化（从 display:none 变可见时动画自动重放，
+     所以切回来也会淡入；纯 opacity+scale，无位移 —— tab 切换不该有方向感） */
+  .pn{animation:tabin .3s cubic-bezier(.32,.72,0,1)}
+  body.tab-chat #sRow,body.tab-chat #cList{animation:tabin .3s cubic-bezier(.32,.72,0,1)}
+  @keyframes tabin{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
+
+  /* 按下即反馈（pointer-down 语义）：iOS 列表行是高亮而不是缩放，
+     控件才是 scale(0.97)。这里统一补上 tap-highlight 清理与 100ms 按压过渡 */
+  .conv,.prow,.mcard,.mitem,.cmditem,.plan,.nitem{-webkit-tap-highlight-color:transparent}
+  .conv:active{background:var(--hover)}
+  .mitem:active,.cmditem:active,.nitem:active{background:var(--hover)}
+  .conv,.prow,.mcard{transition:background .18s ease}
+  /* 触屏列表惯性滚动（iOS 原生手感） */
+  .list,.msgs{-webkit-overflow-scrolling:touch}
+
+  .pn-hd{flex:0 0 auto;height:50px;display:flex;align-items:center;justify-content:space-between;
+         padding:0 12px 0 15px;border-bottom:1px solid var(--bd);font-size:17px;font-weight:600}
+  .pn-wrap{flex:1;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  .plbl{padding:16px 14px 6px;font-size:12px;color:var(--tx3);font-weight:600}
+  .pgrp{margin-top:10px;border-top:1px solid var(--bd)}
+  .prow{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--bg2);
+        border-bottom:1px solid var(--bd);font-size:15px;cursor:pointer}
+  .prow:active{background:var(--hover)}
+  .pgrp .prow:last-child{border-bottom:1px solid var(--bd)}
+  .prow-tx{flex:1;min-width:0}
+  .prow-ic{width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+           border-radius:7px;background:var(--bg3);font-size:15px}
+  .rarr{color:var(--tx3);font-size:18px;line-height:1}
+  .pbadge{min-width:16px;height:16px;padding:0 5px;border-radius:8px;background:var(--danger);
+          color:#fff;font-size:10px;font-style:normal;font-weight:600;
+          display:flex;align-items:center;justify-content:center}
+  .pv{font-size:12px;color:var(--tx3);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .prow.danger{color:var(--danger);justify-content:center}
+  .mcard{display:flex;align-items:center;gap:14px;padding:20px 14px;background:var(--bg2);
+         border-bottom:1px solid var(--bd);cursor:pointer}
+  .mcard:active{background:var(--hover)}
+  .mb-mid{flex:1;min-width:0}
+  .mnm{font-size:18px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mid{font-size:12px;color:var(--tx3);margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .msg{font-size:13px;color:var(--tx2);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pn-empty{padding:26px 14px;text-align:center;color:var(--tx3);font-size:13px}
+
+  /* iOS 26 液态玻璃：悬浮胶囊 + 实时折射底层内容（所以百家 sticky 到底，不用实底挡住） */
+  .tabbar{
+    position:fixed;z-index:100;                          /* 低于 .groom(120)、.mask(200)，全屏页自动盖住它 */
+    left:16px;right:16px;bottom:calc(14px + env(safe-area-inset-bottom));
+    height:62px;display:flex;align-items:stretch;
+    border-radius:31px;
+    background:var(--tb-bg);
+    backdrop-filter:blur(28px) saturate(180%);
+    -webkit-backdrop-filter:blur(28px) saturate(180%);
+    border:.5px solid var(--tb-bd);
+    box-shadow:var(--tb-sd),inset 0 1px 0 var(--tb-hl);   /* inset 高光 = 玻璃边缘 */
+    transition:opacity .2s ease,transform .28s cubic-bezier(.32,.72,0,1);
+  }
+  .tb{flex:1;background:none;border:none;padding:0;font-family:inherit;cursor:pointer;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+      color:var(--tx3);transition:color .18s ease;-webkit-tap-highlight-color:transparent}
+  .tb.on{color:var(--brand)}
+  .tb-ic{position:relative;display:flex;align-items:center;justify-content:center;
+         width:54px;height:30px;border-radius:15px;
+         transition:background .22s ease,transform .22s cubic-bezier(.32,.72,0,1)}
+  .tb.on .tb-ic{background:var(--tb-pill)}
+  .tb:active .tb-ic{transform:scale(.9)}
+  .tb-tx{font-size:10px;letter-spacing:.2px}
+  .tbadge{position:absolute;top:-1px;right:5px;min-width:16px;height:16px;padding:0 4px;
+          border-radius:8px;background:var(--danger);color:#fff;font-size:10px;font-style:normal;
+          display:flex;align-items:center;justify-content:center;font-weight:600}
 }
+/* 未登录 / 登录页时 #app 带 hidden，tabBar 是它的兄弟，跟着一起藏起来（省得改三处 JS） */
+.app.hidden ~ .tabbar{display:none}
 /* ===== 窄屏 / 终端适配增强 ===== */
 @media(max-width:640px){
   #cName{max-width:46vw}
-  .modal{padding:16px;width:auto}
+  /* 弹窗 → iOS 底部 sheet：贴底、上圆角、从底部弹簧滑入；关闭由 JS 滑出（见 closeModal） */
+  .mask{align-items:flex-end}
+  .mask .modal{
+    width:100%;max-width:100%;max-height:88vh;
+    border-radius:18px 18px 0 0;
+    border-bottom:none;
+    padding:20px 16px calc(20px + env(safe-area-inset-bottom));
+    animation:sheetin .42s cubic-bezier(.32,.72,0,1);
+    box-shadow:0 -12px 40px rgba(0,0,0,.2);
+  }
+  .mask .modal.sheet-out{animation:sheetout .3s cubic-bezier(.32,.72,0,1) forwards}
+  @keyframes sheetin{from{transform:translateY(100%)}to{transform:none}}
+  @keyframes sheetout{from{transform:none}to{transform:translateY(100%)}}
 }
 @media(max-width:400px){
   .pop{max-width:calc(100vw - 14px)}
@@ -487,21 +605,40 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 @keyframes sidein{from{transform:translateX(-40px);opacity:0}to{transform:none;opacity:1}}
 
 /* ===== 转场动画与点击特效 ===== */
-/* 消息气泡淡入上滑 */
-@keyframes msgin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.m.anim{animation:msgin .22s ease}
+/* 消息气泡淡入上滑：iOS 临界阻尼曲线，0.3s（damping 1.0 / response 0.3） */
+@keyframes msgin{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.m.anim{animation:msgin .3s cubic-bezier(.32,.72,0,1)}
 /* 弹窗遮罩 + 卡片淡入缩放 */
 .mask{animation:maskin .16s ease}
 @keyframes maskin{from{opacity:0}to{opacity:1}}
 .mask .modal{animation:modalin .2s cubic-bezier(.2,.9,.3,1.2)}
 @keyframes modalin{from{opacity:0;transform:scale(.94) translateY(6px)}to{opacity:1;transform:none}}
 /* toast 滑入淡入 */
-.toast{animation:toastin .22s cubic-bezier(.2,.9,.3,1.1)}
+.toast{animation:toastin .28s cubic-bezier(.32,.72,0,1)}
 @keyframes toastin{from{opacity:0;transform:translateY(-12px) scale(.96)}to{opacity:1;transform:none}}
-/* 会话列表项 hover 过渡 */
-.conv{transition:background .15s ease}
-.conv .cbody{transition:transform .15s ease}
-.conv:hover .cbody{transform:translateX(2px)}
+/* tab 角标出现时弹一下（iOS App 图标角标的 Spring），只动 scale+opacity */
+.tbadge{animation:badgein .45s cubic-bezier(.32,.72,0,1)}
+@keyframes badgein{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:none}}
+/* 会话列表项 hover 过渡：只在真有指针的设备生效（触屏上 hover 会粘连） */
+@media(hover:hover){
+  .conv{transition:background .15s ease}
+  .conv .cbody{transition:transform .15s ease}
+  .conv:hover .cbody{transform:translateX(2px)}
+}
+/* ===== 无障碍动效降级 =====
+   prefers-reduced-motion：不给零反馈，改成交叉淡化 —— 位移动画全部退化成短淡入。
+   prefers-reduced-transparency：毛玻璃材质退成实色（tabBar/面板同层）。 */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;
+    scroll-behavior:auto !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce){
+  body .tabbar{background:var(--bg2);backdrop-filter:none;-webkit-backdrop-filter:none}
+}
 /* ===== 预置指令浮层（输入 # 唤起，参考 Telegram 指令菜单） ===== */
 .cmdpop{width:300px;max-height:280px;overflow-y:auto;padding:6px}
 .cmditem{padding:8px 10px;cursor:pointer;border-radius:8px}
