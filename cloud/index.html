@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@0.1.3/lib/index.global.js"></script>
 <title>Let's Talk · 云端聊天</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2307c160'/%3E%3Cpath d='M14 32 L50 16 L40 50 L32 38 L14 32 Z' fill='white'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/styles.css">
@@ -1032,6 +1032,16 @@ function botDedupe(conv, id) {
 // 同源还有两处：① lastId 为 0 时 tick 主查询会把最旧的 200 条整包拉回；
 // ② pushMsg 的 1000 条上限挤出旧消息后，回填让它们再次变成「新增」。
 // 所以这里再加三道闸，光靠 botDedupe（只在内存里活 10 分钟、刷新即清空）挡不住。
+// 通知/未读的新近度闸：只有「刚发生」的消息才配弹通知、响铃、@toast。
+// ⚠️ 与 botFresh 同源的问题：「新进内存」≠「刚发生」。catchUpScoped 每 10s 回填最近 200 条、
+// 断线重连后 tick 会拉回积压消息，这些对 onNew 全是 added=true —— 通知没有闸的话，
+// 历史消息会一遍遍弹桌面通知 + 响铃（用户报「老消息还会再推送」的直接原因）。
+// 未读计数不加此闸：红点表达「你没看过」，积压消息确实没看过，计数保持准确。
+var NOTIFY_FRESH_MS = 2 * 60 * 1000;
+function msgIsLive(m) {
+  var t = m && m.created_at ? new Date(m.created_at).getTime() : 0;
+  return !!t && (Date.now() - t) < NOTIFY_FRESH_MS;
+}
 var BOT_FRESH_MS = 3 * 60 * 1000;   // ① 时间闸：超过 3 分钟的消息就是历史，不接
 function botFresh(m) {
   var t = m && m.created_at ? new Date(m.created_at).getTime() : 0;
@@ -1272,7 +1282,7 @@ async function osSetUser(uid) {
     }
   } catch (e) {}
 }
-function setSync(txt, bad) { var e = $('#conn'); e.textContent = txt; e.style.color = bad ? 'var(--danger)' : 'var(--brand)'; }
+function setSync(txt, bad, detail) { var e = $('#conn'); e.textContent = txt; e.style.color = bad ? 'var(--danger)' : 'var(--brand)'; e.title = bad ? (detail || '') : ''; }
 function onlineOf(id) {
   if (id === BOT.id) return true;   // 小美 24 小时在线
   var p = S.profiles[id];
@@ -1533,7 +1543,7 @@ function enterApp() {
     setSync('云端已同步');
     startLoops();
     bindGlobalResize();
-  }).catch(function (e) { setSync('同步失败', true); toast('云端数据读取失败：' + (e.message || e), 'err'); });
+  }).catch(function (e) { setSync('同步失败', true, (e && (e.message || e.code)) || String(e)); toast('云端数据读取失败：' + (e.message || e), 'err'); });
 }
 // 窗口尺寸变化的全局监听：只绑一次。
 // 棋盘尺寸靠 CSS 变量 --bh 控制，窗口一变就要重算；但监听器绝不能跟着 canvas 走
@@ -1570,6 +1580,11 @@ function refreshAll() {
     // 再过滤一道：白名单是权威，即使服务端因为 RLS 配置失误多返回了行也不进内存
     S.recent = (msgs || []).filter(function (m) { return canReadConv(m.conv); });
     S.lastId = S.recent.length ? S.recent[0].id : 0;
+    // lastId=0（新号/白名单内暂无消息）的兜底：tick 的 gt(0) 会把全表**最旧的** 200 条
+    // 整包拉回，老消息从此一批批「推送」进来。先探当前最大 id 当起点，只收启动后的增量。
+    var probeMax = S.lastId ? null
+      : q(db.from('messages').select('id').order('id', { ascending: false }).limit(1))
+          .then(function (rows) { S.lastId = (rows && rows[0] && rows[0].id) || 0; });
     // 上线水位：这一刻之前存在的消息都算历史，小美不再追着答（防历史回填刷屏，见 botFresh）
     if (!S.botFloor) S.botFloor = S.lastId;
     // 白名单可能因 recent 里的历史私聊会话而扩张，收敛一次
@@ -1580,6 +1595,7 @@ function refreshAll() {
     renderConvs();
     if (S.info) renderInfo();
     updateOnline();
+    return probeMax;   // null 时视同已 resolve，不阻塞启动链
   });
 }
 // 已读记录：reads 表里每人每会话一条
@@ -1844,7 +1860,7 @@ function tick() {
     // 白名单刚扩张（新加群/新好友）时补拉一次，避免「第一轮 scope 太窄」漏掉消息
     if (heavy) catchUpScoped();
   }).catch(function (e) {
-    setSync('连接异常', true);
+    setSync('连接异常', true, (e && (e.message || e.code)) || String(e));   // 悬停左下角可看具体原因
   }).then(function () { S.busy = false; });
 }
 
@@ -1911,17 +1927,18 @@ function onNew(m) {
   if (canRead) markRead(m.conv);
   var added = pushMsg(m.conv, m);
   if (added) trackRecent(m);        // 让 recent 追上最新消息，侧栏预览才不回退
+  var isLive = msgIsLive(m);        // 回填/断线积压的历史消息静默入列，不打扰
   if (added && !canRead) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;   // 未读增量（权威）
   if (added && isCurrent) renderMsgs();
   if (added && S.wall) renderWall();   // 话题墙打开时，新消息实时刷新墙
   if (added) maybeBotReplyQueued(m);   // 走批次队列：一轮回填里同会话只留最新一条（防刷屏）
-  if (added && !canRead && !c.muted) {
+  if (added && isLive && !canRead && !c.muted) {
     notify(c.name, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
     if (S.sound) beep();
   }
   // 记在 S.atMe 上而不是 c 上：下面这行 buildConvs() 会整体重建 S.convs，
   // 挂在会话对象上的标记会被丢掉（见 S.atMe 定义处的说明）。
-  if ((m.mentions || []).indexOf(S.uid) >= 0) { S.atMe[m.conv] = 1; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
+  if (isLive && (m.mentions || []).indexOf(S.uid) >= 0) { S.atMe[m.conv] = 1; toast('🔔 ' + (m.sender_name || '有人') + ' @了你：' + String(m.text || '').slice(0, 30)); }
   // 重算会话列表：最新消息预览 / 排序 / 未读红点一次性对齐
   if (added) buildConvs();
   renderConvs();
