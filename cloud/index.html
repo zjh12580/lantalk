@@ -909,7 +909,9 @@ var LLM_RETRY = 2;async function botLLM(text, who, conv, ref) {
 function botHoldTyping(conv) {
   botTypingConv = conv;
   if (S.botTyping) { clearTimeout(S.botTyping); S.botTyping = null; }
-  S.botTypingUntil = Date.now() + 60000;
+  // ⚠️ 推理模型（hy4-preview）联网跑 2 轮可能到 60~90s，预算给到 3 分钟，
+  //    否则「输入中」指示器会中途消失（后端单轮超时是 90s，见 agent.js DEFAULT_TIMEOUT）。
+  S.botTypingUntil = Date.now() + 180000;
   updateTyping();
 }
 function botStopTyping() {

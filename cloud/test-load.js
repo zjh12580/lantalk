@@ -1482,12 +1482,14 @@ function makeStub() {
   D.querySelector('#bSend').click();
   await sleep(300);
   log(cmdInput.value === '', '发送 #600519 被 # 指令逻辑拦截（输入框已清空，未走普通文本发送）');
-  // 名称查询：#茅台 走 smartbox 名称解析（桩：window.v_hint）
+  // 名称查询：`#股票 茅台` 走 smartbox 名称解析（桩：window.v_hint）
+  // ⚠️ 2026-09-23 话题墙改动（dengzp）后：`# + 自由文字`（如 #茅台）不再命中预置指令，
+  //    改按普通消息发送进话题墙 → 名称查询必须带 `#股票` 前缀（见 doSend() 的 isPresetHash()）。
   const cardsB4Name = D.querySelectorAll('#mList .cardmsg').length;
-  cmdInput.value = '#茅台';
+  cmdInput.value = '#股票 茅台';
   D.querySelector('#bSend').click();
   await sleep(300);
-  log(D.querySelectorAll('#mList .cardmsg').length === cardsB4Name + 1, '#茅台（名称）查询产出行情卡片');
+  log(D.querySelectorAll('#mList .cardmsg').length === cardsB4Name + 1, '#股票 茅台（名称）查询产出行情卡片');
   const nameCard = Array.prototype.slice.call(D.querySelectorAll('#mList .cardmsg .card')).pop();
   log(!!nameCard && nameCard.textContent.indexOf('贵州茅台') >= 0, '名称解析命中 贵州茅台 并展示名称', nameCard ? nameCard.textContent.slice(0, 80) : 'none');
   cmdInput.value = '';;
@@ -2165,8 +2167,8 @@ function makeStub() {
 
     // ---- 改动1：除常识外，小美优先走联网推理 ----
     log(AJS.indexOf('function isCommonSense') >= 0, 'agent 内置「是否常识题」判定 isCommonSense');
-    log(AJS.indexOf('if (!isCommonSense(text) && req.web !== false)') >= 0,
-      'runAgent 对非常识问题先做一轮预检索（联网优先，不靠模型自觉）');
+    log(AJS.indexOf('const needWeb = plan ? plan.web : !isCommonSense(text)') >= 0,
+      '联网决策优先由需求分析层给出，分析层缺失时退回启发式（联网优先，不靠模型自觉）');
     log(AJS.indexOf("messages.push({ role: 'system', content: buildWebBrief(rows) })") >= 0,
       '预检索结果以【联网资料】注入系统上下文');
     log(AJS.indexOf('const FORCE_SEARCH_RULES') >= 0 && AJS.indexOf('const SKIP_SEARCH_RULES') >= 0,
@@ -2189,6 +2191,70 @@ function makeStub() {
       log(AG.searchQueryOf('#新闻 今天的热点') === '今天的热点', 'searchQueryOf 剥掉 #指令噪声',
         AG.searchQueryOf('#新闻 今天的热点'));
     } else log(false, 'agent.js 导出 searchQueryOf');
+
+    // ---- 改动3：回答之前先做一步 agent 式「需求分析」（2026-09-23）----
+    log(AJS.indexOf('async function analyzeRequest') >= 0, 'agent 内置前置需求分析 analyzeRequest');
+    log(AJS.indexOf('const ANALYZE_TIMEOUT') >= 0 && AJS.indexOf('const ANALYZE_SYS') >= 0,
+      '分析层有独立超时预算与专用 System Prompt');
+    log(/try \{ plan = await analyzeRequest\(deps, req\); \} catch \(e\) \{ plan = null; \}/.test(AJS),
+      '分析层旁路：失败/超时一律降级为「无计划」，不打断主链路');
+    log(AJS.indexOf("messages.push({ role: 'system', content: buildPlanBrief(plan) })") >= 0,
+      '分析结论以系统提示注入上下文（模型据策略作答）');
+    log(AJS.indexOf('USER_ANALYZE_PLACEHOLDER') < 0 && AJS.indexOf("trace.push({ tool: 'analyze'") >= 0,
+      'trace 记录分析层结论，便于线上排查');
+    log(AJS.indexOf('const presetHit = trace.some') >= 0
+      && AJS.indexOf('const maxTurns = presetHit ? 2 : MAX_TURNS') >= 0,
+      '预检索命中后收紧轮次与工具预算（推理模型别反复搜）');
+    log(/const DEFAULT_TIMEOUT = 90000/.test(AJS), '单轮超时放宽到 90s（推理模型思考慢）');
+    log(/S\.botTypingUntil = Date\.now\(\) \+ 180000/.test(IJS), '「输入中」预算覆盖长推理（3 分钟）');
+    if (AG && AG.parsePlan) {
+      const p1 = AG.parsePlan('{"want":"查科技新闻","kind":"news","web":true,"query":"今天科技新闻","steps":["搜","答"]}');
+      log(!!p1 && p1.web === true && p1.query === '今天科技新闻' && p1.steps.length === 2,
+        'parsePlan 解析标准 JSON', JSON.stringify(p1));
+      const p2 = AG.parsePlan('```json\n{"want":"闲聊","web":false}\n```');
+      log(!!p2 && p2.web === false && p2.want === '闲聊', 'parsePlan 容忍 markdown 代码块围栏');
+      log(AG.parsePlan('这不是 JSON') === null, 'parsePlan 坏输入 → null（触发降级）');
+      log(AG.parsePlan('') === null, 'parsePlan 空输入 → null');
+      log(AG.parsePlan('{"web":true}') === null, 'parsePlan 全空字段视为无效计划');
+    } else log(false, 'agent.js 导出 parsePlan');
+    if (AG && AG.buildPlanBrief) {
+      const b1 = AG.buildPlanBrief({ want: '查新闻', kind: 'news', web: true, query: 'x', miss: true, steps: ['搜'] });
+      log(/需求预分析/.test(b1) && /需要联网查证/.test(b1) && /信息可能不足/.test(b1),
+        'buildPlanBrief 渲染策略要点（含联网策略与反问提醒）');
+      log(AG.buildPlanBrief(null) === '', 'buildPlanBrief 无计划时返回空串');
+    } else log(false, 'agent.js 导出 buildPlanBrief');
+    if (AG && AG.analyzeRequest) {
+      const rNull = await AG.analyzeRequest({ analyzeChat: async function () { throw new Error('boom'); } }, { text: 'hi' });
+      log(rNull === null, 'analyzeChat 抛错时 analyzeRequest 返回 null（旁路不炸主链）');
+    } else log(false, 'agent.js 导出 analyzeRequest');
+    if (AG && AG.runAgent) {
+      const stubChat = async function () { return { content: '好的', tool_calls: [], model: 'stub' }; };
+      const rA = await AG.runAgent({ chat: stubChat, analyzeChat: async function () { throw new Error('boom'); } },
+        { text: '你好', history: [] });
+      log(!!rA && rA.ok === true && rA.text === '好的', '分析层挂掉时 runAgent 照常出正文（静默降级）', rA && rA.text);
+      // 文本含「天气」（启发式必搜），但分析层判 web=false → 必须跳过预检索（证明分析层真的在起作用）
+      const rB = await AG.runAgent({ chat: stubChat,
+        analyzeChat: async function () { return { content: '{"want":"闲聊","kind":"chat","web":false}' }; } },
+        { text: '今天北京天气怎么样', history: [] });
+      const trB = (rB && rB.trace) || [];
+      log(!!rB && rB.ok === true && !trB.some(function (t) { return t.tool === 'web_search'; }),
+        '分析层判 web=false 时跳过预检索（不再只靠关键词猜）', JSON.stringify(trB));
+      log(trB.some(function (t) { return t.tool === 'analyze' && t.web === false; }), 'trace 记录分析层结论');
+    } else log(false, 'agent.js 导出 runAgent');
+
+    // server 侧：分析用轻量通道 + 上游畸形工具名防御
+    const SJS = fsx.readFileSync(pathx.join(__dirname, 'server.js'), 'utf8');
+    log(SJS.indexOf('function makeAnalyzeChatFn') >= 0 && SJS.indexOf('analyzeChat: makeAnalyzeChatFn()') >= 0,
+      'server 为需求分析注入轻量通道（优先免费模型，快而省）');
+    const LLMCFG_S = fsx.readFileSync(pathx.join(__dirname, '.llm.json'), 'utf8');
+    log(SJS.indexOf('body.parallel_tool_calls = false') >= 0 && SJS.indexOf('c.parallel_tool_calls === false') >= 0,
+      '可按通道关闭并发工具调用（规避 TokenHub 流式畸形工具名）');
+    log(LLMCFG_S.indexOf('parallel_tool_calls') >= 0 && LLMCFG_S.indexOf('hy4-preview') >= 0,
+      '.llm.json 已登记 hy4 通道且关闭并发工具调用');
+    log(SJS.indexOf('upstream malformed tool name') >= 0, '畸形工具名防御：判为通道失败交给回退链');
+    log(SJS.indexOf('streamOff: c.stream === false') >= 0 && SJS.indexOf('const useStream = streamOff !== true') >= 0,
+      '支持按通道关闭流式（TokenHub 流式畸形工具名的根治办法）');
+    log(LLMCFG_S.indexOf('"stream": false') >= 0, '.llm.json 已给 hy4 通道关闭流式');
 
     // ---- 改动2：象棋不限制走子 + 将军提示双方 ----
     log(IJS.indexOf('moves: function (board, r, c) { return GX.rawMoves(board, r, c); }') >= 0,

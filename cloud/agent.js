@@ -469,13 +469,117 @@ function buildSystemPrompt(opts) {
 }
 
 /* ===========================================================================
+ * 三·五、前置需求分析（回答之前先「读懂需求 → 定策略」）
+ *   agent 式三段：① 需求分析 ② 工具/联网执行 ③ 作答。
+ *   ⚠️ 旁路铁律：分析失败 / 超时 / 返回不可解析 → 一律静默降级为「无计划」，
+ *      完全走原有逻辑，绝不影响主链路（错一次也不能让用户收不到回复）。
+ * =========================================================================*/
+
+const ANALYZE_TIMEOUT = 12000;   // 分析层要快：超了就不要计划，直接回答
+
+const ANALYZE_SYS = [
+  '你是一个「需求分析器」。在助手正式回答用户之前，你负责把用户这句话读懂、定好策略。',
+  '只输出一个 JSON 对象：不要 markdown 代码块，不要任何解释、不要多余文字。字段如下：',
+  '{',
+  '  "want": "一句话复述用户真正想要什么（必须消解指代：「那个东西」「上次说的」要还原成具体对象）",',
+  '  "kind": "chat|qa|howto|news|lookup|create|task 之一",',
+  '  "web": true 或 false,   // 是否需要联网查证才能答准',
+  '  "query": "建议的检索词（web 为 true 时给：简短、像在搜索引擎里会输入的那种）",',
+  '  "miss": true 或 false,  // 是否缺少关键信息、需要先反问用户一句',
+  '  "steps": ["1-3 步执行计划，每步不超过 20 字"]',
+  '}',
+  '判断要点：',
+  '- 寒暄 / 情绪表达 / 纯常识 / 主观创作（写诗、编故事、起名、润色）→ web=false，kind 用 chat 或 create。',
+  '- 涉及「最新 / 今天 / 现在 / 价格 / 股价 / 汇率 / 天气 / 新闻 / 热点 / 谁 / 哪一年」→ web=true。',
+  '- 用户带了指代（那个、它、上次说的）→ 先从对话历史里定位到底指什么，写进 want。',
+  '- 信息明显不足、不反问就没法答（如「帮我订一下」「那个改了吗」）→ miss=true。',
+  '- steps 写给执行者看的：要搜什么、要不要算、要注意什么。别写「回答用户」这种废话。',
+].join('\n');
+
+function buildAnalyzeMessages(req) {
+  const msgs = [{ role: 'system', content: ANALYZE_SYS }];
+  const hist = (req.history || []).slice(-8);
+  if (hist.length) {
+    msgs.push({ role: 'system', content: '【近期对话（供你消解指代）】\n' + hist.map((m) => {
+      const who = m.role === 'assistant' ? '小美' : '用户';
+      return who + '：' + String(m.content || '').slice(0, 300);
+    }).join('\n') });
+  }
+  msgs.push({
+    role: 'user',
+    content: '当前发言者：' + (req.who || '朋友') + '\n用户这句话：' + String(req.text || '') + '\n\n请只输出那个 JSON。',
+  });
+  return msgs;
+}
+
+/** 宽松解析分析层输出；任何异常都返回 null（→ 降级为无计划） */
+function parsePlan(s) {
+  if (!s) return null;
+  let t = String(s).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  const a = t.indexOf('{');
+  const b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) t = t.slice(a, b + 1);
+  let j;
+  try { j = JSON.parse(t); } catch (e) { return null; }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+  const steps = Array.isArray(j.steps)
+    ? j.steps.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().slice(0, 40)).slice(0, 3)
+    : [];
+  const plan = {
+    want: String(j.want || '').trim().slice(0, 200),
+    kind: String(j.kind || '').trim().slice(0, 16),
+    web: j.web === true || j.web === 'true',
+    query: String(j.query || '').trim().slice(0, 120),
+    miss: j.miss === true || j.miss === 'true',
+    steps,
+  };
+  // 全空 = 模型没给有效内容 → 视为无计划
+  if (!plan.want && !plan.kind && !plan.steps.length && !plan.query) return null;
+  return plan;
+}
+
+/**
+ * 跑一次需求分析。deps.analyzeChat（轻量通道，可选）优先，否则退回主 chat。
+ * 返回 plan 或 null；**不抛异常**。
+ */
+async function analyzeRequest(deps, req) {
+  const chat = (deps && (deps.analyzeChat || deps.chat));
+  if (!chat) return null;
+  try {
+    const out = await chat({
+      messages: buildAnalyzeMessages(req),
+      tools: null,
+      disableTools: true,
+      timeoutMs: ANALYZE_TIMEOUT,
+    });
+    return parsePlan(out && out.content);
+  } catch (e) { return null; }
+}
+
+/** 把计划渲染成注入上下文的一段 system 提示（不打扰用户，只给模型看） */
+function buildPlanBrief(plan) {
+  if (!plan) return '';
+  const l = ['【本轮需求预分析（系统自动生成；供你把握方向，不要复述给用户）】'];
+  if (plan.want) l.push('用户真正想要：' + plan.want);
+  if (plan.kind) l.push('问题类型：' + plan.kind);
+  l.push(plan.web
+    ? '策略：需要联网查证（下面【联网资料】就是按这个需求检索的，优先用它作答）'
+    : '策略：不需要联网，直接用你的知识自然作答');
+  if (plan.steps.length) l.push('建议步骤：' + plan.steps.map((s, i) => (i + 1) + '. ' + s).join('；'));
+  if (plan.miss) l.push('提醒：信息可能不足 —— 若确实缺关键信息，先礼貌反问一句，别硬猜。');
+  return l.join('\n');
+}
+
+/* ===========================================================================
  * 四、Agent 主循环（OpenAI 兼容 function-calling）
  * ===========================================================================*/
 
 const MAX_TURNS = 3;          // 最多 3 轮（模型 → 工具 → 模型 → …）
 const MAX_TOOL_CALLS = 4;     // 单次回复最多调用工具次数（超过就强制收敛）
 const MAX_HISTORY = 16;       // 上下文条数上限（与前端 AGENT_CTX_N 对齐）
-const DEFAULT_TIMEOUT = 45000;
+// ⚠️ 单轮超时。推理模型（hy4-preview）思考链长，45s 常被撞满 → 白等一轮再回退。
+//    放宽到 90s；预检索命中时轮次已收紧到 2，总体仍在可接受范围。
+const DEFAULT_TIMEOUT = 90000;
 
 /**
  * @param {object} deps
@@ -500,26 +604,41 @@ async function runAgent(deps, req) {
   });
   const trace = [];
 
-  // ★ 联网优先：只要不是「常识/寒暄/主观创作」，就先替模型做一轮检索，
-  //   把资料塞进上下文再让它回答 —— 不依赖模型是否自觉调工具，
-  //   保证「非常识问题一定经过联网推理」。检索失败静默降级（模型仍可自己调 web_search）。
+  // ★ ① 需求分析（agent 式第一步）：读懂用户要什么、要不要联网、检索词怎么给、信息够不够。
+  //   ⚠️ 旁路铁律：这里任何失败/超时都只是「没有计划」，主循环照常跑（降级为原有行为）。
+  let plan = null;
+  try { plan = await analyzeRequest(deps, req); } catch (e) { plan = null; }
+  if (plan) trace.push({ tool: 'analyze', ok: true, kind: plan.kind, web: plan.web, miss: plan.miss, query: plan.query });
+
+  // ★ ② 联网优先：是否检索由分析层决定（比关键词猜测准）；分析层缺失时退回原启发式。
+  //   把资料塞进上下文再让它回答 —— 不依赖模型是否自觉调工具。
   //   ⚠️ req.web === false 时跳过（调用方可显式关闭）。
-  if (!isCommonSense(text) && req.web !== false) {
+  const needWeb = plan ? plan.web : !isCommonSense(text);
+  if (needWeb && req.web !== false) {
     try {
-      const rows = await webSearch(searchQueryOf(text) || text, 4);
+      const q = (plan && plan.query) || searchQueryOf(text) || text;
+      const rows = await webSearch(q, 4);
       if (rows && rows.length) {
         messages.push({ role: 'system', content: buildWebBrief(rows) });
-        trace.push({ tool: 'web_search', preset: true, ok: true, hits: rows.length });
+        trace.push({ tool: 'web_search', preset: true, ok: true, hits: rows.length, query: q });
       }
     } catch (e) { /* 检索失败就当没搜到，继续走模型自带工具 */ }
   }
+  if (plan) messages.push({ role: 'system', content: buildPlanBrief(plan) });
   messages.push({ role: 'user', content: text });
+
+  // ⚠️ 预检索已经把资料放进上下文 → 收紧轮次与工具预算，别让模型反复搜。
+  //    推理模型（hy4-preview）单轮思考可达数十秒，多搜一轮就要多等半分多钟。
+  const presetHit = trace.some((t) => t.tool === 'web_search' && t.preset);
+  const maxTurns = presetHit ? 2 : MAX_TURNS;
+  // 预检索已经把资料给了 → 模型最多再补搜 1 次（hy4 每补一轮要多等几十秒）
+  const maxToolCalls = presetHit ? 1 : MAX_TOOL_CALLS;
 
   let toolCalls = 0;
   let lastModel = null;
 
-  for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const isLastChance = turn === MAX_TURNS - 1;
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const isLastChance = turn === maxTurns - 1;
     let resp;
     try {
       resp = await chat({
@@ -539,7 +658,7 @@ async function runAgent(deps, req) {
 
     const calls = resp.tool_calls || [];
     // ⚠️ 工具预算已用尽但模型还想调工具 → 收回工具、强制出正文（否则会一路空转到 llm_error）
-    const budgetOut = toolCalls >= MAX_TOOL_CALLS;
+    const budgetOut = toolCalls >= maxToolCalls;
     if (!calls.length || budgetOut) {
       const content = String(resp.content || '').trim();
       if (content) return { ok: true, text: content, model: lastModel, trace, turns: turn + 1 };
@@ -585,7 +704,7 @@ async function runAgent(deps, req) {
     }
     // ⚠️ 收敛机制：工具预算用完 → 明确告诉模型「别再搜了，现在开始回答」
     //    否则模型会一直「再搜一次更全」，把轮次耗光 → 返回 llm_error（踩过）
-    if (toolCalls >= MAX_TOOL_CALLS || turn === MAX_TURNS - 1) {
+    if (toolCalls >= maxToolCalls || turn === maxTurns - 1) {
       messages.push({
         role: 'user',
         content: '（工具调用已达上限。请立刻基于以上已有信息给出最终回答；信息不足就如实说明查到了什么、还有什么没查到。不要再调用工具。）',
@@ -599,4 +718,6 @@ module.exports = {
   TOOLS, WEB_SOURCES, webSearch, runTool, toolWeather, toolNowTime,
   buildSystemPrompt, runAgent, MAX_TURNS, MAX_TOOL_CALLS, DEFAULT_TIMEOUT,
   isCommonSense, searchQueryOf, buildWebBrief,
+  // 前置需求分析（agent 第一段）
+  analyzeRequest, parsePlan, buildPlanBrief, buildAnalyzeMessages, ANALYZE_SYS, ANALYZE_TIMEOUT,
 };
