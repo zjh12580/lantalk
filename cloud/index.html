@@ -1802,9 +1802,15 @@ function ensureConv(conv, type, id) {
 // ---------- 轮询 ----------
 function startLoops() {
   if (S.loop) return;
-  S.loop = setInterval(tick, 2500);
+  S.syncFails = 0;                  // 连续失败计数：驱动「抖动不报错 + 失败退避」
+  scheduleTick(2500);               // 首轮维持 2.5s 延迟：refreshAll 刚拉过全量，无需立即再查
   S.beat = setInterval(heartbeat, 30000);
   // 小美只在被 @ 或私聊时回复，不再起「不定时冒泡」定时器
+}
+// 轮询调度改为 setTimeout 递归（而非固定 setInterval）：连续失败时指数退避，
+// 网络抖动/断网期间不再每 2.5 秒打一轮 7 路查询（那只会刷出一串「连接异常」），成功即恢复。
+function scheduleTick(wait) {
+  S.loop = setTimeout(tick, wait != null ? wait : 2500);
 }
 function heartbeat() {
   db.from('profiles').update({ last_seen: new Date().toISOString() }).eq('id', S.uid).then(function () {}).catch(function () {});
@@ -1828,7 +1834,16 @@ function tick() {
     q(db.from('games').select('*')),      // 每轮都拉（表很小）：游戏状态 2.5 秒内同步
   ];
   if (heavy) jobs.push(q(db.from('group_members').select('*')), q(db.from('groups').select('*')), q(db.from('reads').select('*')));
-  Promise.all(jobs).then(function (r) {
+  // ⚠️ 逐路兜底（不再 Promise.all 一荣俱荣一损俱损）：7 路查询里任何一路抖动，
+  //    过去会让整轮失败 → 每 2.5 秒刷一次「连接异常」。现在成功的路照常消化，
+  //    失败的路计一次失败；**连续** 2 轮失败才标红，单次抖动静默自愈。
+  var settled = jobs.map(function (p) {
+    return p.then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, e: e }; });
+  });
+  Promise.all(settled).then(function (rs) {
+    var bad = rs.filter(function (x) { return !x.ok; });
+    var firstErr = bad.length ? (bad[0].e && (bad[0].e.message || bad[0].e.code)) || String(bad[0].e) : '';
+    var r = rs.map(function (x) { return x.ok ? x.v : []; });
     var fresh = r[0];
     syncFriends(r[1]);
     S.profiles = {}; r[2].forEach(function (p) { S.profiles[p.id] = p; });
@@ -1856,12 +1871,22 @@ function tick() {
       if (S.cur) renderMsgs();
     }
     if (fresh.length || heavy) { renderConvs(); updTitle(); }
-    setSync('云端已同步');
+    // 同步状态：全绿才亮「云端已同步」；偶发单路失败先静默（下一轮多半自己好），
+    // 连续 2 轮失败才亮红字，避免网络抖动时左下角「连接异常」闪个不停。
+    if (!bad.length) { S.syncFails = 0; setSync('云端已同步'); }
+    else if (++S.syncFails >= 2) setSync(bad.length === rs.length ? '连接异常' : '部分同步异常', true, firstErr);
     // 白名单刚扩张（新加群/新好友）时补拉一次，避免「第一轮 scope 太窄」漏掉消息
     if (heavy) catchUpScoped();
   }).catch(function (e) {
-    setSync('连接异常', true, (e && (e.message || e.code)) || String(e));   // 悬停左下角可看具体原因
-  }).then(function () { S.busy = false; });
+    // 查询全成功但消化逻辑自身抛错：也不能让轮询死掉
+    if (++S.syncFails >= 2) setSync('同步出错', true, (e && (e.message || e.code)) || String(e));
+  }).then(function () {
+    S.busy = false;
+    // 失败退避：连续失败时把轮询间隔指数拉长（2.5s → 5s → 10s → 20s → 30s 封顶），
+    // 断网/服务端抖动期间不再高频重试刷红字；成功计数归零后自然回到 2.5s。
+    var wait = Math.min(2500 * Math.pow(2, Math.min(S.syncFails || 0, 4)), 30000);
+    scheduleTick(wait);
+  });
 }
 
 // 白名单扩张后补拉一次消息：解决「新会话在自己的第一条消息到达时还不在 scope 里」的时序问题。
@@ -3451,6 +3476,7 @@ window.LT = {
   botAnswer: function (t, w0, c) { return botAnswer(t, w0, c); },
   // 供测试断言「小美只接刚刚发生的消息」（防历史回填刷屏）
   botFresh: function (m) { return botFresh(m); },
+  msgIsLive: function (m) { return msgIsLive(m); },
   botBatchBegin: function () { return botBatchBegin(); },
   botBatchEnd: function () { return botBatchEnd(); },
   botBatchPeek: function () { return BOT_BATCH; },

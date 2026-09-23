@@ -1825,6 +1825,38 @@ function makeStub() {
         'botFresh：id 高于水位的新消息才接');
       LT.setBotFloor(savedFloor);
     } else log(false, 'window.LT.botFresh 已导出');
+    // ---- 通知/未读新近度闸 + 轮询退避（2026-09-23 修「老消息反复推送 / 连接异常刷屏」）----
+    // 本块作用域独立：自取 index.html 源码（只剥行首注释，禁全局剥块注释）
+    const IJS = require('fs').readFileSync(require('path').join(__dirname, 'index.html'), 'utf8')
+      .split('\n').map(function (l) { return l.replace(/^\s*\/\/.*$/, ''); }).join('\n');
+    // ---- 通知/未读新近度闸 + 轮询退避（2026-09-23 修「老消息反复推送 / 连接异常刷屏」）----
+    if (LT && LT.msgIsLive) {
+      const nowL = Date.now();
+      log(LT.msgIsLive({ created_at: new Date(nowL - 5000).toISOString() }) === true,
+        'msgIsLive：5 秒前的消息是「实时」的，可弹通知');
+      log(LT.msgIsLive({ created_at: new Date(nowL - 10 * 60 * 1000).toISOString() }) === false,
+        'msgIsLive：10 分钟前的消息不弹通知（回填/积压静默入列）');
+      log(LT.msgIsLive({}) === false, 'msgIsLive：无时间戳一律按历史处理');
+      log(IJS.indexOf('if (added && isLive && !canRead && !c.muted)') >= 0,
+        'onNew 的桌面通知/响铃已挂 msgIsLive 闸');
+      log(IJS.indexOf('if (isLive && (m.mentions || []).indexOf(S.uid) >= 0)') >= 0,
+        '@提醒 toast 也挂 msgIsLive 闸（历史 @ 不再轰炸）');
+      log(IJS.indexOf('if (added && !canRead) S.unread[m.conv]') >= 0,
+        '未读计数不加新近度闸（红点保持「没看过就是没看过」的语义）');
+      log(IJS.indexOf('order(\'id\', { ascending: false }).limit(1)') >= 0
+        && IJS.indexOf('var probeMax = S.lastId ? null') >= 0,
+        'refreshAll：lastId=0 时先探最大 id，tick 不再从全表最旧 200 条爬起');
+    } else log(false, 'window.LT.msgIsLive 已导出');
+    log(IJS.indexOf('var settled = jobs.map(function (p) {') >= 0
+      && IJS.indexOf('Promise.all(settled)') >= 0,
+      'tick 逐路兜底：单表抖动不再让整轮失败');
+    log(IJS.indexOf('else if (++S.syncFails >= 2)') >= 0,
+      '连续 2 轮失败才标红（单次抖动静默自愈，不再刷「连接异常」）');
+    log(IJS.indexOf('Math.min(2500 * Math.pow(2, Math.min(S.syncFails || 0, 4)), 30000)') >= 0
+      && IJS.indexOf('function scheduleTick(') >= 0,
+      '失败指数退避：2.5s→30s 封顶，断网期间不再高频重试');
+    log(IJS.indexOf('if (++S.syncFails >= 2) setSync(\'同步出错\'') >= 0,
+      '消化逻辑抛错也有 catch 兜底，轮询循环不死');
     if (LT && LT.maybeBotReplyQueued && LT.botBatchPeek) {
       const mk = (id) => ({ conv: 'g:hall', id: id, sender_id: 'u1', mentions: ['bot_xiaomei'], text: 'x' });
       LT.botBatchBegin();
