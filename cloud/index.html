@@ -2676,7 +2676,7 @@ function cardHtml(json) {
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
     (c.sub ? '<div class="csub">' + esc(c.sub) + '</div>' : '') + '</div></div>' +
-    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + '</div>' +
+    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + news + '</div>' +
     (c.foot ? '<div class="cfoot">' + esc(c.foot) + '</div>' : '') + plans + '</div>';
 }
 function planAct(act, el) {
