@@ -84,7 +84,14 @@ function buildChannels() {
     if (!c.api_key && !c.keyless) return;                     // 无 key 且非免密钥通道 → 跳过
     const base = String(c.base_url).replace(/\/+$/, '');
     if (list.some((x) => x.base === base && x.model === c.model)) return;
-    list.push({ name: c.name || base, base, key: c.api_key || '', model: c.model, free: !!c.free, keyless: !!c.keyless });
+    list.push({ name: c.name || base, base, key: c.api_key || '', model: c.model, free: !!c.free, keyless: !!c.keyless,
+      // ⚠️ parallel_tool_calls：腾讯 TokenHub 流式下并发多工具时，会把多个工具名用内部标记
+      //    拼成一个畸形 name（如 "now_time</tool_call:xxx><tool_call:xxx>web_search"）→ 工具无法识别。
+      //    该通道置 false 可让模型改为串行调用（2026-09-23 实测修复）。
+      parallelToolCalls: c.parallel_tool_calls === true ? true : (c.parallel_tool_calls === false ? false : undefined),
+      // ⚠️ stream:false → 该通道走非流式整包响应。实测腾讯 TokenHub 流式下偶发把多个工具名
+      //    拼成畸形 name（即使 parallel_tool_calls:false 也偶发），非流式则 100% 正常。
+      streamOff: c.stream === false });
   };
 
   if (Array.isArray(LLMCFG.channels)) LLMCFG.channels.forEach(push);
@@ -433,11 +440,17 @@ function accumulateChunk(acc, chunk) {
  * @returns {Promise<{content,tool_calls,model}>}
  */
 async function callOpenAICompat(opt) {
-  const { base, key, model, keyless, messages, tools, disableTools, onDelta, timeoutMs } = opt;
+  const { base, key, model, keyless, messages, tools, disableTools, onDelta, timeoutMs, parallelToolCalls, streamOff } = opt;
   const ac = new AbortController();
   const to = setTimeout(() => ac.abort(), timeoutMs || AGENT.DEFAULT_TIMEOUT);
-  const body = { model, messages, stream: true };
-  if (tools && tools.length && !disableTools) { body.tools = tools; body.tool_choice = 'auto'; }
+  const useStream = streamOff !== true;      // 见 buildChannels：某些上游流式会拼坏工具名
+  const body = { model, messages, stream: useStream };
+  if (tools && tools.length && !disableTools) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+    // 见 buildChannels 注释：上游流式并发工具名畸形的规避开关（按通道配置）
+    if (parallelToolCalls === false) body.parallel_tool_calls = false;
+  }
   // 免密钥通道（云端网关）不带 Authorization；有 key 的才带
   const headers = { 'Content-Type': 'application/json' };
   if (key && !keyless) headers.Authorization = 'Bearer ' + key;
@@ -453,12 +466,15 @@ async function callOpenAICompat(opt) {
       throw new Error('upstream ' + r.status + ' ' + String(t).slice(0, 200));
     }
     const acc = { content: '', tool_calls: [] };
-    if (!r.body || typeof r.body.getReader !== 'function') {
-      // 无流能力：整包解析
+    if (!useStream || !r.body || typeof r.body.getReader !== 'function') {
+      // 无流能力（或该通道显式关闭流式）：整包解析
       const j = await r.json();
       const ch = (j.choices && j.choices[0]) || {};
       const msg = ch.message || {};
-      return { content: msg.content || '', tool_calls: (msg.tool_calls || []).map((t) => ({ id: t.id, name: t.function && t.function.name, arguments: t.function && t.function.arguments })), model: j.model || model };
+      const calls0 = (msg.tool_calls || []).map((t) => ({ id: t.id, name: t.function && t.function.name, arguments: t.function && t.function.arguments }));
+      const bad0 = calls0.find((t) => t.name && /[^A-Za-z0-9_.\-]/.test(t.name));
+      if (bad0) throw new Error('upstream malformed tool name: ' + String(bad0.name).slice(0, 80));
+      return { content: msg.content || '', tool_calls: calls0, model: j.model || model };
     }
     const reader = r.body.getReader();
     const dec = new TextDecoder('utf-8');
@@ -484,6 +500,10 @@ async function callOpenAICompat(opt) {
     const calls = acc.tool_calls.filter((t) => t && t.name).map((t, i) => ({
       id: t.id || ('call_' + i), name: t.name, arguments: t.arguments || '{}',
     }));
+    // ⚠️ 畸形工具名防御：上游（腾讯 TokenHub 流式）偶发把多个工具名拼成一个带内部标记的 name。
+    //    直接透传会得到「未知工具 xxx」并浪费一轮对话 —— 判为该通道失败，交给回退链更干净。
+    const bad = calls.find((t) => /[^A-Za-z0-9_.\-]/.test(t.name) || t.name.length > 64);
+    if (bad) throw new Error('upstream malformed tool name: ' + String(bad.name).slice(0, 80));
     return { content: acc.content, tool_calls: calls, model };
   } finally { clearTimeout(to); }
 }
@@ -501,7 +521,36 @@ function makeChatFn(preferStream) {
     const errors = [];
     for (const ch of CHANNELS) {
       try {
-        const out = await callOpenAICompat(Object.assign({ base: ch.base, key: ch.key, model: ch.model, keyless: ch.keyless }, opts));
+        const out = await callOpenAICompat(Object.assign(
+          { base: ch.base, key: ch.key, model: ch.model, keyless: ch.keyless,
+            parallelToolCalls: ch.parallelToolCalls, streamOff: ch.streamOff }, opts));
+        out._channel = ch.name + ':' + ch.model;
+        return out;
+      } catch (e) {
+        errors.push(ch.name + ': ' + e.message);
+        // 回退原因要可见（否则只看到「最终用了下一个通道」，查不出上游为什么失败）
+        console.warn('[chat] 通道失败 ' + ch.name + ' → ' + String(e.message).slice(0, 220));
+      }
+    }
+    throw new Error(errors.length ? errors.join(' | ') : 'no_llm_channel_configured');
+  };
+}
+
+/**
+ * 需求分析专用的轻量 chat：优先用**免费通道**（分析要快、要便宜），不流式、不带工具。
+ * 分析层是「旁路」—— 这里的任何失败都只是「没有计划」，由 agent.js 静默降级。
+ */
+function makeAnalyzeChatFn() {
+  const order = CHANNELS.slice().sort((a, b) => (a.free === b.free ? 0 : (a.free ? -1 : 1)));
+  return async function analyzeChat(req) {
+    const errors = [];
+    for (const ch of order) {
+      try {
+        const out = await callOpenAICompat({
+          base: ch.base, key: ch.key, model: ch.model, keyless: ch.keyless,
+          messages: req.messages, tools: null, disableTools: true,
+          timeoutMs: req.timeoutMs || 15000,
+        });
         out._channel = ch.name + ':' + ch.model;
         return out;
       } catch (e) { errors.push(ch.name + ': ' + e.message); }
@@ -638,7 +687,7 @@ const server = http.createServer(async (req, res) => {
     const rl = rateHit('/api/chat', clientIp(req));
     if (rl) return sendTooMany(res, rl.retryAfter);
     try {
-      const out = await AGENT.runAgent({ chat: makeChatFn(true) }, {
+      const out = await AGENT.runAgent({ chat: makeChatFn(true), analyzeChat: makeAnalyzeChatFn() }, {
         text,
         who: payload.who,
         scene: payload.scene,
@@ -726,7 +775,7 @@ if (require.main === module) {
     console.log('[cloud] listening on 0.0.0.0:' + PORT
       + '  intent=' + (API_KEY ? 'on' : 'off(no TYPESAFE_API_KEY)')
       + '  intent_model=' + MODEL
-      + '  chat_channels=' + (CHANNELS.map((c) => c.name + ':' + c.model + (c.free ? '(free)' : '')).join(' > ') || 'none'));
+      + '  chat_channels=' + (CHANNELS.map((c) => c.name + ':' + c.model + (c.free ? '(free)' : '') + (c.parallelToolCalls === false ? '(serial)' : '')).join(' > ') || 'none'));
   });
 }
 module.exports = { server, QUESTIONS, shapeAnswer, ANALYZE_QUESTIONS, shapeAnalyze };
