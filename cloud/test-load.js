@@ -1308,7 +1308,9 @@ function makeStub() {
   const verRow = D.querySelector('#sVer');
   const verTxt = verRow ? verRow.textContent.replace(/\s+/g, ' ').trim() : '';
   log(!!verRow, '设置面板含「版本」行');
-  log(/[0-9a-f]{7}\s*·\s*\d{4}-\d{2}-\d{2}/.test(verTxt), '版本号以 git 提交号 + 日期呈现', verTxt);
+  // 2026-09-23 变更：版本行只显示时间（YYYY/MM/DD HH:mm），git 提交号移出面板（太长，用户不需要看）
+  log(/^\u7248\u672c\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}$/.test(verTxt), '版本号只显示时间（YYYY/MM/DD HH:mm，无 sha）', verTxt);
+  log(!/[0-9a-f]{7}/.test(verTxt), '版本行不再出现 git 提交号', verTxt);
   D.querySelector('#bSet').click();   // 收起设置面板
   await sleep(100);
 
@@ -2094,6 +2096,69 @@ function makeStub() {
     // 失败要撤销标记，允许重试
     log(/if \(S\.histLoaded\) delete S\.histLoaded\[conv\];/.test(IJS),
       '拉取失败撤销 histLoaded 标记（下次进会话可重试）');
+  }
+
+  // ===== 消息分页 + 本地缓存 + 版本戳格式（2026-09-23）=====
+  {
+    const fsx = require('fs');
+    const pathx = require('path');
+    const IJS = fsx.readFileSync(pathx.join(__dirname, 'index.html'), 'utf8');
+    const LT = w.LT;
+
+    // ---- 版本戳：只显示时间，去掉 git 提交号 ----
+    log(IJS.indexOf("return BUILD.sha + ' · ' + BUILD.date;") < 0, 'verTag 不再拼接 git 提交号');
+    log(/return m\[1\] \+ '\/' \+ m\[2\] \+ '\/' \+ m\[3\]/.test(IJS), '版本时间用 YYYY/MM/DD 格式输出');
+    {
+      const tag = LT.verTag();
+      log(/^\d{4}\/\d{2}\/\d{2}( \d{2}:\d{2})?$/.test(tag), 'verTag() 实际输出「' + tag + '」形如 2026/09/23 12:08');
+      log(!/[0-9a-f]{7}/.test(tag), '版本串里不含 sha（不再显示 3815341 这类提交号）');
+    }
+    log(IJS.indexOf("title=\"' + esc(((BUILD.sha ? BUILD.sha + ' · ' : '')") >= 0,
+      'sha 移到 title 悬停可见（信息没丢，只是不占面板）');
+
+    // ---- 首屏不再一次性灌入导入历史（用户报的「历史消息挤进最新窗口」根因）----
+    log(IJS.indexOf('rows.concat(keep)') < 0, '旧的「首屏 concat 全部导入历史」已移除');
+    log(IJS.indexOf('S.msgs[conv] = mergeById(rows, localPage(conv, lo, hi));') >= 0,
+      '首屏只放最新一页 + 落在本 id 区间的导入历史');
+    log(IJS.indexOf('localMsgs: {},') >= 0, 'S.localMsgs 独立桶存在（导入历史与云端消息分离）');
+    log(/S\.localMsgs\[c\.conv\] = S\.localMsgs\[c\.conv\] \|\| \[\]/.test(IJS),
+      '导入/启动恢复写入 localMsgs 而非 S.msgs');
+    log(IJS.indexOf('if (!(S.histLoaded || {})[conv] || (S.impLoaded || {})[conv]) return loadHistory(conv);') < 0,
+      'impLoaded 不再强制每次进会话重拉（省一次网络请求）');
+
+    // ---- 合并去重 + id 数字比较 ----
+    log(/function mergeById\(/.test(IJS), '存在 mergeById：统一去重 + 排序入口');
+    {
+      const merged = LT.mergeById([{ id: 10, t: 'b' }, { id: 9, t: 'a' }], [{ id: 10, t: 'dup' }, { id: 11, t: 'c' }]);
+      log(merged.length === 3, 'mergeById 去重：4 条含 1 条重复 → 3 条');
+      log(merged.map((x) => x.id).join(',') === '9,10,11', 'mergeById 按 id 升序：' + merged.map((x) => x.id).join(','));
+      // ⚠️ 字符串比较会得出 '9' > '10'，时间线就串行了 —— 必须按数字比
+      const sc = LT.mergeById([{ id: '10' }, { id: '9' }], []);
+      log(sc.map((x) => x.id).join(',') === '9,10', 'id 按数字比较（字符串 id 也不会串行）');
+      log(LT.mid({ id: 'abc' }) === 0, '非法 id 归一为 0（不会变成 NaN 污染排序）');
+    }
+
+    // ---- 本地缓存 ----
+    log(IJS.indexOf("var MSG_CACHE_KEY = 'lt_msgcache_v1';") >= 0, '存在本地缓存键 lt_msgcache_v1');
+    log(IJS.indexOf('var cch = cacheGet(conv);') >= 0, 'openConv 先用本地缓存渲染（不等网络，秒开）');
+    log(/function cachePut\(conv\)/.test(IJS) && /function cacheGet\(conv\)/.test(IJS), '缓存读写函数齐备');
+    log(/function cacheKey\(\) \{ return MSG_CACHE_KEY \+ \(S\.uid \? '_' \+ S\.uid : ''\); \}/.test(IJS),
+      '缓存按账号隔离（换号登录不会先渲染出上一个人的消息）');
+    log(IJS.indexOf('localStorage.getItem(cacheKey())') >= 0 && IJS.indexOf('localStorage.setItem(cacheKey()') >= 0,
+      '缓存走 localStorage（云端存储 + 本地缓存双层）');
+
+    // ---- 分页 + 滚动无感加载 ----
+    log(/limit\(MSG_PAGE\)/.test(IJS), '云端查询按 MSG_PAGE 分页（不再一次拉全量）');
+    log(LT.MSG_PAGE > 0 && LT.MSG_PAGE <= 50, '每页条数 MSG_PAGE=' + LT.MSG_PAGE + '（合理范围）');
+    log(/function loadEarlier\(\)/.test(IJS), '存在 loadEarlier（无感加载入口）');
+    log(/box\.addEventListener\('scroll'/.test(IJS), '消息容器挂了 scroll 监听');
+    log(IJS.indexOf('if (box.scrollTop < MSG_NEAR_TOP) loadEarlier();') >= 0, '滚到距顶阈值内自动加载更早一页');
+    log(IJS.indexOf("S.msgs[conv] = mergeById(rows.concat(localPage(conv, lo, hi)), S.msgs[conv]);") >= 0,
+      '往更早翻时新页拼到前面（不是追加到末尾 → 不会倒序）');
+    log(IJS.indexOf('if (before && !rows.length)') >= 0, '云端翻到底时用本地导入历史兜底');
+
+    // ---- 导出不能丢导入历史 ----
+    log(/concat\(\(S\.localMsgs \|\| \{\}\)\[c\.conv\] \|\| \[\]\)/.test(IJS), '导出包包含导入历史桶里的消息');
   }
 
   // ===== 会话隔离（安全边界）：2026-09-22 改为 canReadConv 独立判据 =====
