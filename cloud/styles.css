@@ -265,6 +265,29 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 .isec .row:last-child{border-bottom:none}
 .isec .row:first-of-type{border-top:1px solid var(--bd)}
 .info .btn.block{margin-top:14px}
+/* ===== 群聊话题墙（参考小红书话题发现页） ===== */
+.wall{width:300px;flex-shrink:0;background:var(--bg2);border-left:1px solid var(--bd);overflow-y:auto;padding:14px}
+.wall .whead{display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 12px}
+.wall .whead b{font-size:15px;color:var(--tx)}
+.wall .whead span{font-size:11px;color:var(--tx3)}
+.wall .wgrid{column-count:2;column-gap:10px}   /* 瀑布流：CSS 多列实现 */
+.wall .wtopic{break-inside:avoid;margin:0 0 10px;background:var(--bg3);border-radius:12px;overflow:hidden;cursor:pointer;border:1px solid var(--bd);transition:transform .15s,box-shadow .15s}
+.wall .wtopic:hover{transform:translateY(-2px);box-shadow:var(--sd)}
+.wall .wcover{width:100%;aspect-ratio:1/1;display:block;background:linear-gradient(135deg,#ff6b81,#ffd86b)}
+.wall .wcover img{width:100%;height:100%;object-fit:cover;display:block}
+.wall .wcover .wph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.18)}
+.wall .wmeta{padding:7px 8px 9px}
+.wall .wt{font-size:13px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wall .wc{font-size:11px;color:var(--tx3);margin-top:2px}
+.wall .wfoot{font-size:11px;color:var(--tx3);margin-top:8px;text-align:center;line-height:1.6}
+.wall .wfoot b{color:var(--brand)}
+/* 消息里的 #话题 高亮成可点 chip */
+.topic{color:var(--brand);cursor:pointer;font-weight:600}
+.topic:hover{text-decoration:underline}
+/* 话题筛选横幅 */
+.topicbar{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--brand);color:#fff;padding:6px 12px;font-size:13px}
+.topicbar .ib{background:transparent;border:none;color:#fff;padding:2px 6px}
+.topicbar .ib:hover{background:rgba(255,255,255,.18)}
 
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:200}
 .modal{background:var(--bg2);border-radius:14px;width:420px;max-width:92vw;max-height:84vh;overflow-y:auto;padding:22px;box-shadow:var(--sd)}
@@ -397,6 +420,7 @@ body.unread-glow .app{animation:uglow 1.1s infinite}
 /* 窄屏：会话信息改为右侧滑入抽屉，移除 display:none!important（修复"点信息不展开"） */
 @media(max-width:900px){
   .info{position:fixed;top:0;right:0;bottom:0;width:300px;max-width:86vw;z-index:70;box-shadow:var(--sd);animation:sidein .18s ease}
+  .wall{position:fixed;top:0;right:0;bottom:0;width:300px;max-width:86vw;z-index:70;box-shadow:var(--sd);animation:sidein .18s ease}
 }
 .hd-on{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);margin-right:10px;white-space:nowrap}
 @media(max-width:640px){.hd-on{display:none}}

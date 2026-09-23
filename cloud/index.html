@@ -115,10 +115,12 @@
           <span class="hd-on" id="hdOn" title="当前在线人数"><i class="doton"></i><span id="hdOnTx">在线 0 人</span></span>
           <button class="ib" id="bBell" title="提示音">🔔</button>
           <button class="ib" id="bFind" title="查找记录">🔍</button>
+          <button class="ib" id="bWall" title="话题墙" style="display:none">🏷️</button>
           <button class="ib" id="bInfo" title="会话信息">ⓘ</button>
         </div>
       </div>
       <div class="ann hidden" id="annBar"></div>
+      <div class="topicbar hidden" id="topicBar"><span id="topicTx"></span><button class="ib" id="topicClear" title="退出话题筛选">✕</button></div>
       <div class="msgs" id="mList"></div>
       <div class="compwrap">
       <div class="typ hidden" id="typBar"></div>
@@ -141,6 +143,7 @@
     </div>
   </main>
   <aside class="info hidden" id="info"></aside>
+  <aside class="wall hidden" id="wall"></aside>
 </div>
 
 <div class="mask hidden" id="mask"><div class="modal" id="modal"></div></div>
@@ -249,7 +252,7 @@ var S = {
   //    S.convs（每个会话都是全新对象），挂在旧对象上的标记当场丢失 ——
   //    表现就是「有人 @ 我」的侧栏高亮永远不出现（实测 atMe 恒为 undefined）。
   atMe: {},               // 会话 -> 1：有人在这条会话里 @ 了我（进会话时清除）
-  reply: null, filter: 'all', q: '', info: false, theme: 'dark', sound: true,
+  reply: null, filter: 'all', q: '', info: false, wall: false, topicFilter: null, theme: 'dark', sound: true,
   pickAvatar: '', pickColor: '', tickCount: 0, lastBeat: 0, busy: false,
   attach: [],            // 待发送附件队列（粘贴/选择后先预览，点发送才上传）
   lastBotSaid: 0,        // 小美上次发言时间，用于防刷屏
@@ -1910,6 +1913,7 @@ function onNew(m) {
   if (added) trackRecent(m);        // 让 recent 追上最新消息，侧栏预览才不回退
   if (added && !canRead) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;   // 未读增量（权威）
   if (added && isCurrent) renderMsgs();
+  if (added && S.wall) renderWall();   // 话题墙打开时，新消息实时刷新墙
   if (added) maybeBotReplyQueued(m);   // 走批次队列：一轮回填里同会话只留最新一条（防刷屏）
   if (added && !canRead && !c.muted) {
     notify(c.name, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
@@ -2075,6 +2079,9 @@ function openConv(conv) {
   $('#cSub').textContent = c.type === 'group' ? c.memberCount + ' 位成员' : (onlineOf(c.id) ? '在线' : '离线');
   if (c.type === 'group' && c.announcement) { $('#annBar').classList.remove('hidden'); $('#annBar').textContent = '📢 ' + c.announcement; }
   else $('#annBar').classList.add('hidden');
+  // 话题墙按钮仅群聊可见；切会话时清除话题筛选 / 关闭墙
+  $('#bWall').style.display = (c.type === 'group') ? '' : 'none';
+  if (S.topicFilter || S.wall) { S.topicFilter = null; closeWall(); updateTopicBar(); }
   S.unread[conv] = 0;
   delete S.atMe[conv];   // 进会话即视为已读 @ 提醒（旧写法 c.atMe=false 会被 buildConvs 重建冲掉）
   renderConvs();
@@ -2257,6 +2264,107 @@ function gameFingerprint(list) {
     return id + ':' + g.status + ':' + (g.turn || '') + ':' + (g.guestId || '') + ':' + (g.winner || '') + ':' + (g.restartBy || '');
   }).join(',');
 }
+// ===================== 群聊话题墙（参考小红书话题发现页） =====================
+// 纯前端：从已加载的消息文本里解析 #话题 标签，聚合成本地话题墙。
+// 不依赖后端：消息数据本就是客户端轮询/缓存得到，聚合在内存里做即可。
+function topicsOf(text) {
+  // ⚠️ 先剥离 URL 再提取：否则链接里的 #片段（如 https://x.com/p#a 的 a）会被误判成话题
+  var clean = String(text || '').replace(/(https?:\/\/[^\s]+)/g, '');
+  var out = [], m, re = /#([^\s#@]{1,30})/g;
+  while ((m = re.exec(clean))) out.push(m[1]);
+  return out;
+}
+// 富文本渲染：URL 包裹、#话题 高亮成可点 chip、@提及 高亮。
+// ⚠️ 先按 URL 切段，只在非 URL 段里做 #话题 高亮，避免把链接里的 #片段 误当话题。
+function richText(text, mentions) {
+  var t = esc(text || '');
+  var parts = t.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map(function (seg, i) {
+    if (i % 2 === 1) return '<a href="' + seg + '" target="_blank" rel="noopener noreferrer" style="color:var(--at)">' + seg + '</a>';
+    var s = seg.replace(/#([^\s#@]{1,30})/g, function (w) {
+      return '<span class="topic" data-topic="' + w.slice(1).replace(/"/g, '') + '">' + w + '</span>';
+    });
+    if (mentions && mentions.length) s = s.replace(/@([\u4e00-\u9fa5\w-]{1,20})/g, '<span class="at">$&</span>');
+    return s;
+  }).join('');
+}
+// 聚合当前会话的话题：name / 帖子数 / 参与人数 / 封面图(首条带图消息) / 最近时间
+function buildTopics(conv) {
+  var list = S.msgs[conv] || [], map = {};
+  list.forEach(function (m) {
+    if (m.type === 'system' || m.type === 'card' || m.revoked) return;
+    var ts = topicsOf(m.text);
+    if (!ts.length) return;
+    var cover = (m.type === 'image' && m.file_path) ? m.file_path : null;
+    var tm = new Date(m.created_at).getTime() || 0;
+    ts.forEach(function (t) {
+      var k = t.toLowerCase();
+      if (!map[k]) map[k] = { name: t, count: 0, users: {}, cover: null, last: 0 };
+      var o = map[k];
+      o.count++; o.users[m.sender_id] = 1;
+      if (!o.cover && cover) o.cover = cover;
+      if (tm > o.last) o.last = tm;
+    });
+  });
+  return Object.keys(map).map(function (k) {
+    var o = map[k];
+    return { name: o.name, count: o.count, users: Object.keys(o.users).length, cover: o.cover, last: o.last };
+  }).sort(function (a, b) { return b.count - a.count || b.last - a.last; });
+}
+function renderWall() {
+  var c = cm()[S.cur];
+  if (!c || c.type !== 'group') return;
+  var bar = $('#wall');
+  var topics = buildTopics(S.cur);
+  var grid = topics.map(function (t) {
+    var hue = 0; for (var i = 0; i < t.name.length; i++) hue = (hue * 31 + t.name.charCodeAt(i)) % 360;
+    var cover = t.cover
+      ? '<div class="wcover"><img src="' + esc(t.cover) + '" alt=""></div>'
+      : '<div class="wcover" style="background:linear-gradient(135deg,hsl(' + hue + ',75%,62%),hsl(' + ((hue + 38) % 360) + ',80%,55%))"><div class="wph">#' + esc(t.name.slice(0, 1)) + '</div></div>';
+    return '<div class="wtopic" data-topic="' + esc(t.name).replace(/"/g, '') + '">'
+      + cover
+      + '<div class="wmeta"><div class="wt">#' + esc(t.name) + '</div>'
+      + '<div class="wc">' + t.count + ' 条 · ' + t.users + ' 人参与</div></div></div>';
+  }).join('');
+  bar.innerHTML = '<div class="whead"><b>🏷️ 话题墙</b><span>群组热门话题</span></div>'
+    + (topics.length ? '<div class="wgrid">' + grid + '</div>'
+      : '<div class="wfoot">还没有话题～<br>在输入框输入 #话题 发起第一个吧</div>')
+    + '<div class="wfoot">在输入框输入 <b>#话题</b> 文字即可发起新话题<br>点击话题可只看该话题的消息</div>';
+  $$('#wall .wtopic').forEach(function (el) { el.onclick = function () { filterTopic(el.getAttribute('data-topic')); }; });
+}
+function openWall() {
+  var c = cm()[S.cur];
+  if (!c || c.type !== 'group') { toast('话题墙仅群聊可用'); return; }
+  S.wall = true;
+  $('#wall').classList.remove('hidden');
+  renderWall();
+}
+function closeWall() {
+  S.wall = false;
+  $('#wall').classList.add('hidden');
+}
+// 点话题卡 / 点消息里的 #话题 chip：过滤当前会话只看该话题
+function filterTopic(name) {
+  if (!name) return;
+  S.topicFilter = String(name).toLowerCase();
+  closeWall();
+  renderMsgs('keep');
+  updateTopicBar();
+}
+function clearTopic() {
+  S.topicFilter = null;
+  renderMsgs('keep');
+  updateTopicBar();
+}
+function updateTopicBar() {
+  var bar = $('#topicBar');
+  if (!S.topicFilter) { bar.classList.add('hidden'); return; }
+  var n = (S.msgs[S.cur] || []).filter(function (m) {
+    return m.type !== 'system' && !m.revoked && topicsOf(m.text).some(function (t) { return t.toLowerCase() === S.topicFilter; });
+  }).length;
+  $('#topicTx').textContent = '正在查看 #' + S.topicFilter + ' · ' + n + ' 条';
+  bar.classList.remove('hidden');
+}
 function renderMsgs(scroll) {
   var box = $('#mList');
   // 关键：在替换内容「之前」先判定用户是否本来就在底部（此刻的数据是旧内容，scrollHeight 与视口匹配）。
@@ -2265,6 +2373,8 @@ function renderMsgs(scroll) {
   var wasAtBottom = distBefore < 80;
   var prevH = box.scrollHeight;
   var list = S.msgs[S.cur] || [];
+  // 话题筛选：只看含指定 #话题 的消息（系统消息/撤回不计入）
+  if (S.topicFilter) list = list.filter(function (m) { return m.type !== 'system' && !m.revoked && topicsOf(m.text).some(function (t) { return t.toLowerCase() === S.topicFilter; }); });
   var curConv = cm()[S.cur];   // 循环内复用：readLabel 不再每条消息重建一次会话 map
   // ⚠️ 指纹去重：轮询每 4 轮（约 10 秒）会无条件调 renderMsgs，而它要重建整个 innerHTML
   //    并重新绑定上百个事件监听。内容没变时这一轮纯属浪费（长会话下肉眼可见地卡）。
@@ -2340,8 +2450,7 @@ function renderMsgs(scroll) {
         body += '<img class="at2" data-t="image" data-f="' + esc(m.file_path) + '" data-n="' + esc(m.file_name) + '" style="max-width:260px;border-radius:6px;background:var(--bg3)" alt="图片" title="点击查看大图">';
         if (m.text) body += '<div style="margin-top:6px">' + esc(m.text) + '</div>';
       } else if (m.type === 'file') body += '<div class="fcard" data-f="' + esc(m.file_path) + '" data-t="file"><span class="fi">📄</span><div><div class="fn">' + esc(m.file_name) + '</div><div class="fs">' + fmtSize(m.file_size) + ' · 点击下载</div></div></div>';
-      else body += esc(m.text).replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer" style="color:var(--at)">$1</a>')
-        .replace(/@([\u4e00-\u9fa5\w-]{1,20})/g, function (s0) { return (m.mentions || []).length ? '<span class="at">' + s0 + '</span>' : s0; });
+      else body += richText(m.text, m.mentions);
       inner = '<div class="bub ' + ((m.mentions || []).indexOf(S.uid) >= 0 ? 'hl' : '') + '">' + body + '</div>';
     }
     function rdHtml(rd) {
@@ -2381,6 +2490,7 @@ function renderMsgs(scroll) {
   $$('#mList .ops button').forEach(function (b) { b.onclick = function () { msgAct(b.dataset.a, b.dataset.i); }; });
   $$('#mList .rd[data-r]').forEach(function (el) { el.onclick = function () { showReadDetail(el.dataset.r); }; });
   $$('#mList .plan').forEach(function (el) { el.onclick = function (ev) { ev.stopPropagation(); planAct(el.getAttribute('data-act'), el); }; });
+  $$('#mList .topic').forEach(function (el) { el.onclick = function (ev) { ev.stopPropagation(); filterTopic(el.getAttribute('data-topic')); }; });
   $$('#mList .mav').forEach(function (a) {
     var uid = a.dataset.u;
     if (!uid || uid === S.uid || uid === 'system') { a.style.cursor = 'default'; return; }
@@ -2598,7 +2708,7 @@ function cardHtml(json) {
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
     (c.sub ? '<div class="csub">' + esc(c.sub) + '</div>' : '') + '</div></div>' +
-    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + '</div>' +
+    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + news + '</div>' +
     (c.foot ? '<div class="cfoot">' + esc(c.foot) + '</div>' : '') + plans + '</div>';
 }
 function planAct(act, el) {
@@ -3464,6 +3574,8 @@ $('#bInfo').onclick = function () {
   $('#info').classList.toggle('hidden', !S.info);
   if (S.info) renderInfo();
 };
+$('#bWall').onclick = function () { if (S.wall) closeWall(); else openWall(); };
+$('#topicClear').onclick = function () { clearTopic(); };
 function renderInfo() {
   var c = cm()[S.cur];
   if (!c) return;
@@ -3806,6 +3918,11 @@ document.addEventListener('click', function (e) {
   if (S.info && window.innerWidth <= 900 && !t.closest('#info') && !t.closest('#bInfo')
       && !t.closest('#modal') && !t.closest('.pop')) {
     $('#info').classList.add('hidden'); S.info = false;
+  }
+  // 窄屏下 .wall 同为右侧滑入抽屉，点外部关闭
+  if (S.wall && window.innerWidth <= 900 && !t.closest('#wall') && !t.closest('#bWall')
+      && !t.closest('#modal') && !t.closest('.pop')) {
+    $('#wall').classList.add('hidden'); S.wall = false;
   }
 });
 document.addEventListener('keydown', function (e) {
