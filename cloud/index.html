@@ -129,7 +129,6 @@
         <div class="attlist hidden" id="attBar"></div>
         <div class="tools">
           <button class="ib" id="bEmo" title="表情"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5s1.2 1.8 3.5 1.8 3.5-1.8 3.5-1.8"/><line x1="9" y1="9.5" x2="9.01" y2="9.5"/><line x1="15" y1="9.5" x2="15.01" y2="9.5"/></svg></button>
-          <button class="ib" id="bImg" title="图片"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-4.5-4.5L7 21"/></svg></button>
           <button class="ib" id="bFile" title="文件"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.85 1.85 0 0 1-2.6-2.6l8.2-8.2"/></svg></button>
           <button class="ib" id="bGame" title="一起玩游戏"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="12" rx="5"/><line x1="7" y1="13" x2="7" y2="13.01"/><line x1="7" y1="10.5" x2="7" y2="15.5"/><line x1="4.5" y1="13" x2="9.5" y2="13"/><circle cx="16" cy="11" r="1.1"/><circle cx="18.5" cy="14" r="1.1"/><circle cx="13.5" cy="14" r="1.1"/></svg></button>
           <button class="ib" id="bCmd" title="预置指令 #">#</button>
@@ -157,7 +156,6 @@
   <button class="ib" id="viewerClose" title="关闭">✕</button>
 </div>
 <div class="toasts" id="toasts"></div>
-<input type="file" id="fImg" accept="image/*" class="hidden">
 <input type="file" id="fFile" class="hidden">
 
 
@@ -2608,8 +2606,7 @@ var CMDS = [
   { cmd: '#eth', sym: 'ethereum', label: '以太坊行情', desc: '实时价格 / 涨跌幅 / 成交量', arg: false },
   { cmd: '#股票', sym: '', label: '股票行情', desc: '# + 代码或名称：#600519 / #茅台 / #腾讯', arg: true },
   { cmd: '#help', sym: '', label: '指令帮助', desc: '列出全部可用预置指令', arg: false },
-  { cmd: '#分析', label: '聊天洞察', desc: '分析当前会话氛围/意图/好感信号（消耗 AI 额度）', arg: false },
-  { cmd: '#新闻', label: '新闻速览', desc: 'The Guardian 全球头条（可加关键词：#新闻 科技）', arg: true }
+  { cmd: '#分析', label: '聊天洞察', desc: '分析当前会话氛围/意图/好感信号（消耗 AI 额度）', arg: false }
 ];
 var DEFAULT_PH = '输入消息，Enter 发送，Shift+Enter 换行...';
 function fmtNum(n) {
@@ -2661,22 +2658,11 @@ function cardHtml(json) {
   } else if (c.plans) {
     plans = '<div class="plans"><div class="plh">💡 可以这样说</div><div class="pnohint">暂无可生成的建议</div></div>';
   }
-  var news = '';
-  if (c.news && c.news.length) {
-    news = '<div class="news">' + c.news.map(function (n) {
-      var img = n.thumb ? '<img class="nimg" src="' + attr(n.thumb) + '" alt="" loading="lazy">' : '';
-      var metaBits = [n.source, n.time ? fmtNewsTime(n.time) : ''].filter(Boolean);
-      var metaHtml = metaBits.length ? '<div class="nmeta">' + esc(metaBits.join(' · ')) + '</div>' : '';
-      var descHtml = n.desc ? '<div class="ndesc">' + esc(n.desc) + '</div>' : '';
-      return '<a class="nitem" href="' + attr(n.url) + '" target="_blank" rel="noopener">' +
-        img + '<div class="nbody"><div class="ntitle">' + esc(n.title) + '</div>' + metaHtml + descHtml + '</div></a>';
-    }).join('') + '</div>';
-  }
   return '<div class="card' + (plans ? ' wplans' : '') + '">' +
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
     (c.sub ? '<div class="csub">' + esc(c.sub) + '</div>' : '') + '</div></div>' +
-    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + news + '</div>' +
+    '<div class="cbody' + (c.wide ? ' wide' : '') + '">' + bars + (tags ? '<div class="tags">' + tags + '</div>' : '') + rows + '</div>' +
     (c.foot ? '<div class="cfoot">' + esc(c.foot) + '</div>' : '') + plans + '</div>';
 }
 function planAct(act, el) {
@@ -2693,10 +2679,6 @@ function parseHash(text) {
   var low = s.toLowerCase();
   if (low === 'analyze' || low === 'analyse' || s === '分析') return { kind: 'analyze' };
   if (low === 'help') return { kind: 'help' };
-  if (/^新闻(\s|$)/.test(s) || /^news(\s|$)/i.test(s)) {
-    var nq = s.replace(/^(新闻|news)\s*/i, '').trim();
-    return { kind: 'news', query: nq };
-  }
   var cryptoMap = { btc: 'bitcoin', bitcoin: 'bitcoin', eth: 'ethereum', ethereum: 'ethereum', doge: 'dogecoin', dogecoin: 'dogecoin' };
   if (cryptoMap[low]) return { kind: 'crypto', sym: cryptoMap[low] };
   var sec = null;
@@ -2754,39 +2736,6 @@ function resolveStock(q) {
     if (pick.m === 'hk') return 'hk' + pick.code;
     if (pick.m === 'us') return 'us' + pick.code.replace(/\..*$/, '').toUpperCase();
     return pick.m + pick.code;
-  });
-}
-var GUARDIAN_KEY = '541211ab-631c-460d-aeca-4fb6dd494147';  // The Guardian Open Platform；前端直连（CORS 已实测开放）。如泄露可在 open-platform.theguardian.com 重置
-function fmtNewsTime(iso) {
-  try { var d = new Date(iso); if (isNaN(d.getTime())) return '';
-    var p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
-  } catch (e) { return ''; }
-}
-function fetchGuardian(query) {
-  // The Guardian Open Platform：实测 CORS = access-control-allow-origin: *，前端直接 fetch，无需后端代理
-  var url = 'https://content.guardianapis.com/search?api-key=' + GUARDIAN_KEY +
-    '&page-size=8&order-by=newest&show-fields=headline,thumbnail,trailText,byline' +
-    (query ? '&q=' + encodeURIComponent(query) : '');
-  return fetch(url).then(function (r) { return r.json(); }).then(function (d) {
-    if (!d.response || d.response.status !== 'ok') throw new Error('Guardian 接口返回异常');
-    var items = (d.response.results || []).map(function (it) {
-      var f = it.fields || {};
-      return {
-        title: f.headline || it.webTitle || '无标题',
-        url: it.webUrl || '',
-        thumb: f.thumbnail || '',
-        desc: f.trailText || '',
-        source: it.sectionName || '',
-        time: it.webPublicationDate || ''
-      };
-    }).filter(function (n) { return n.url; });
-    if (!items.length) throw new Error('没有找到相关新闻');
-    return {
-      logo: '📰', title: query ? ('新闻 · ' + query) : '新闻速览',
-      sub: 'The Guardian · 全球头条', wide: true, news: items,
-      foot: '数据来自 The Guardian Open Platform（仅 Guardian 内容，免费公开）'
-    };
   });
 }
 function fetchCrypto(sym) {
@@ -2949,7 +2898,6 @@ function handleHashCmd(text) {
   var prom;
   if (p.kind === 'crypto') prom = fetchCrypto(p.sym);
   else if (p.kind === 'stock') prom = fetchStock(p.sec, p.code);
-  else if (p.kind === 'news') prom = fetchGuardian(p.query);
   else prom = resolveStock(p.query).then(function (sec) { return fetchStock(sec, p.query); });
   prom.then(function (card) { postCard(card); })
     .catch(function (e) { postCard({ err: (e && e.message) || '查询失败' }); });
@@ -3306,9 +3254,7 @@ function manualPut(path, file) {
 }
 // 选中/粘贴的文件先进入待发送队列，不立刻上传
 function handleFile(file) { addAttach(file); }
-$('#fImg').onchange = function () { handleFile(this.files[0]); this.value = ''; };
 $('#fFile').onchange = function () { handleFile(this.files[0]); this.value = ''; };
-$('#bImg').onclick = function () { $('#fImg').click(); };
 $('#bFile').onclick = function () { $('#fFile').click(); };
 
 // Ctrl+V 粘贴：剪贴板里有图片就直接上传发送（焦点在别的输入框时不干扰）
