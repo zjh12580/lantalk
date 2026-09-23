@@ -13,8 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 下限（package.json 声明 >=16）与当前 LTS 都验证一遍
-        node-version: ['16', '20']
+        # 下限（package.json 声明 >=18）与当前 LTS 都验证一遍
+        # ⚠️ 不再测 16：server.js 用的是 Node 18+ 内置的全局 fetch（无 polyfill），
+        #    node 16 没有 fetch，/api/* 一律 "fetch is not defined"（实测 test:intent 挂 10 项）。
+        #    node 16 已于 2023-09 EOL，不为其引入 node-fetch/undici 依赖。
+        node-version: ['18', '20']
 
     steps:
       - uses: actions/checkout@v4

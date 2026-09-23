@@ -25,6 +25,13 @@
  *            （均已 gitignore，不会进仓库）
  */
 'use strict';
+// ⚠️ 本文件用的是 Node 18+ 内置的全局 fetch（不引 polyfill）。
+//    node 16 没有 fetch，且只有在首次调上游时才会抛 "fetch is not defined"——
+//    那种错极难定位（表现为所有 /api 都 ok:false/reason:upstream），所以启动就明确拦下。
+if (typeof fetch !== 'function') {
+  console.error('[fatal] server.js 需要 Node 18+（依赖内置 fetch），当前运行版本：' + process.version);
+  process.exit(1);
+}
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
