@@ -1454,7 +1454,10 @@ function makeStub() {
   cmdInput.value = '#';
   cmdInput.dispatchEvent(new w.Event('input', { bubbles: true }));
   await sleep(140);
-  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 5, '输入 # 弹出 5 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
+  // 预置指令 6 条：#btc / #eth / #股票 / #help / #分析 / #新闻（#新闻 由 f85d695 加入）
+  log(!cmdpop.classList.contains('hidden') && cmdpop.querySelectorAll('.cmditem').length === 6, '输入 # 弹出 6 个预置指令', cmdpop.querySelectorAll('.cmditem').length);
+  const newsItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#新闻')[0];
+  log(!!newsItem, '菜单含 #新闻 指令项（The Guardian 全球头条）');
   const btcItem = Array.prototype.filter.call(cmdpop.querySelectorAll('.cmditem'), (it) => it.dataset.cmd === '#btc')[0];
   log(!!btcItem, '菜单含 #btc 指令项');
   const cardsBefore = D.querySelectorAll('#mList .cardmsg').length;
@@ -1788,6 +1791,52 @@ function makeStub() {
     log(/var BOT_REPLIED = \{\}/.test(code) && /function botDedupe/.test(code),
       'maybeBotReply 增加按消息 id 去重（BOT_REPLIED + botDedupe）');
     log(/if \(!botDedupe\(m\.conv, m\.id\)\) return;/.test(code), 'maybeBotReply 在调用 botReply 前做去重守卫');
+
+    // 6b) ⚠️⚠️ 刷屏回归（2026-09-23 线上事故）：历史回填触发的「新消息」不能让小美接话
+    // 根因：catchUpScoped() 每 10 秒回填最近 200 条，对 S.msgs 全是「新增」→
+    // 历史上每条 @小美 都被重答一遍，一进大厅被几十条旧话题回复刷屏。
+    log(/function botFresh\(/.test(code) && /if \(!botFresh\(m\)\) return;/.test(code),
+      'maybeBotReply 增加时间闸 botFresh（回填上来的历史消息不接话）');
+    log(/if \(S\.botFloor && mid\(m\) <= S\.botFloor\) return false;/.test(code),
+      'botFresh 含上线水位闸 S.botFloor（我上线前的消息一律算历史）');
+    log(/function botBatchBegin\(/.test(code) && /function botBatchEnd\(/.test(code) && /function maybeBotReplyQueued\(/.test(code),
+      '新增批次闸：一轮回填里同会话只取最新一条去判（botBatchBegin/End + maybeBotReplyQueued）');
+    log(/if \(added\) maybeBotReplyQueued\(m\)/.test(code),
+      'onNew 走批次队列，不再逐条直接触发回复');
+    log((code.match(/botBatchBegin\(\);/g) || []).length >= 2 && (code.match(/botBatchEnd\(\);/g) || []).length >= 2,
+      'tick 与 catchUpScoped 各自包裹批次（两处回填入口都覆盖）');
+    log(!/BOT_CONV_COOL/.test(code),
+      '不做延时冷却：用户连着 @ 两次必须每次都答（冷却会吞掉第二条）');
+    log(/if \(!S\.botFloor\) S\.botFloor = S\.lastId;/.test(code),
+      'refreshAll 设定上线水位 S.botFloor（刷新后不追答旧消息）');
+    if (LT && LT.botFresh) {
+      const nowT = Date.now();
+      const savedFloor = LT.S.botFloor;
+      LT.setBotFloor(0);
+      log(LT.botFresh({ id: 1, created_at: new Date(nowT - 10 * 60 * 1000).toISOString() }) === false,
+        'botFresh：10 分钟前的消息视为历史，不接话');
+      log(LT.botFresh({ id: 1, created_at: new Date(nowT - 5000).toISOString() }) === true,
+        'botFresh：5 秒前的新消息照常接话');
+      log(LT.botFresh({ id: 1 }) === false, 'botFresh：无时间戳（导入历史/本地构造）一律不接');
+      LT.setBotFloor(100);
+      log(LT.botFresh({ id: 99, created_at: new Date(nowT - 1000).toISOString() }) === false,
+        'botFresh：id 不高于上线水位时，即使很新也算历史');
+      log(LT.botFresh({ id: 101, created_at: new Date(nowT - 1000).toISOString() }) === true,
+        'botFresh：id 高于水位的新消息才接');
+      LT.setBotFloor(savedFloor);
+    } else log(false, 'window.LT.botFresh 已导出');
+    if (LT && LT.maybeBotReplyQueued && LT.botBatchPeek) {
+      const mk = (id) => ({ conv: 'g:hall', id: id, sender_id: 'u1', mentions: ['bot_xiaomei'], text: 'x' });
+      LT.botBatchBegin();
+      LT.maybeBotReplyQueued(mk(1));
+      LT.maybeBotReplyQueued(mk(2));
+      LT.maybeBotReplyQueued(mk(3));
+      const b = LT.botBatchPeek() || {};
+      log(b['g:hall'] && b['g:hall'].id === 3,
+        '批次内同一会话只保留最新一条（3 条 @小美 只会判 1 次）', b['g:hall'] ? b['g:hall'].id : 'none');
+      LT.botBatchEnd();
+      log(LT.botBatchPeek() === null, '批次结束后收集器已清空');
+    } else log(false, 'window.LT.maybeBotReplyQueued / botBatchPeek 已导出');
 
     // 7) 多模型回退链
     log(/LLM_RETRY/.test(code) && /S\.llmQueue\.slice\(\)/.test(code),

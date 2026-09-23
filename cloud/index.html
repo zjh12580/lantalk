@@ -238,7 +238,7 @@ var HALL_AVATAR = { emoji: '🏛️', color: '#07c160' };
 
 var S = {
   uid: null, me: null, profiles: {}, groups: [], members: {}, friends: [], reqs: [],
-  convs: [], cur: null, msgs: {}, lastId: 0, reads: {}, readsAll: {}, unread: {}, urls: {},
+  convs: [], cur: null, msgs: {}, lastId: 0, botFloor: 0, reads: {}, readsAll: {}, unread: {}, urls: {},
   histLoaded: {},       // 会话 -> 是否已成功拉过一次云端历史（不能用 msgs[conv] 是否存在代替）
   impLoaded: {},        // 会话 -> 是否导入过本地聊天记录（仅作标记，不再用作「每次进会话都重拉」的条件）
   localMsgs: {},        // 会话 -> 导入的历史消息。独立存放、按页合入窗口，**绝不一次性灌进 S.msgs**
@@ -1021,6 +1021,37 @@ function botDedupe(conv, id) {
   for (var k in BOT_REPLIED) { if (BOT_REPLIED[k] < cut) delete BOT_REPLIED[k]; }
   return true;
 }
+// ⚠️⚠️ 「新进内存的消息」≠「刚发生的消息」—— 只有后者才配让小美接话。
+// 线上事故（2026-09-23）：catchUpScoped() 每 10 秒回填最近 200 条消息，这些消息对
+// S.msgs 而言全是「新增」（会话历史要等 openConv → loadHistory 才装载），于是历史上
+// 每一条 @小美 都被当成新消息重新答一遍 → 一进大厅被几十条旧话题回复刷屏。
+// 同源还有两处：① lastId 为 0 时 tick 主查询会把最旧的 200 条整包拉回；
+// ② pushMsg 的 1000 条上限挤出旧消息后，回填让它们再次变成「新增」。
+// 所以这里再加三道闸，光靠 botDedupe（只在内存里活 10 分钟、刷新即清空）挡不住。
+var BOT_FRESH_MS = 3 * 60 * 1000;   // ① 时间闸：超过 3 分钟的消息就是历史，不接
+function botFresh(m) {
+  var t = m && m.created_at ? new Date(m.created_at).getTime() : 0;
+  if (!t) return false;                                    // 无时间戳（本地构造/导入历史）按历史处理
+  if (Date.now() - t > BOT_FRESH_MS) return false;
+  if (S.botFloor && mid(m) <= S.botFloor) return false;
+  return true;
+}
+// ③ 批次闸：一轮回填（tick / catchUpScoped 各算一批）里，同一会话**只取最新一条**去判要不要接话。
+// 不做这道闸的话，一批 200 条里若有 20 条 @小美（哪怕是几分钟内的真消息），也会一次吐 20 条回复。
+// 注意这里**不做延时冷却**：用户连着 @ 两次是真需求，必须每次都答；要挡的是「一批历史灌进来」。
+var BOT_BATCH = null;               // 非 null 表示正在收集批次：conv -> 该会话最新一条
+function botBatchBegin() { BOT_BATCH = {}; }
+function botBatchEnd() {
+  var b = BOT_BATCH; BOT_BATCH = null;
+  if (!b) return;
+  Object.keys(b).forEach(function (conv) { maybeBotReply(b[conv]); });
+}
+// onNew 走这里（批量回填），sendMsg 走 maybeBotReply 本体（用户刚发的，立即答）
+function maybeBotReplyQueued(m) {
+  if (!m || !m.conv) return;
+  if (BOT_BATCH) { BOT_BATCH[m.conv] = m; return; }
+  maybeBotReply(m);
+}
 function maybeBotReply(m) {
   if (!m || !m.conv || m.sender_id === BOT.id) return;
   var c = cm()[m.conv];
@@ -1028,9 +1059,10 @@ function maybeBotReply(m) {
   var isBotChat = c.type === 'private' && c.id === BOT.id;
   var atBot = (m.mentions || []).indexOf(BOT.id) >= 0;
   if (!isBotChat && !atBot) return;
-  if (!botDedupe(m.conv, m.id)) return;   // 同一条消息只回一次
+  if (!botFresh(m)) return;                     // 历史回填 / 陈旧消息：一律不接
   var who = m.sender_name || ((S.profiles[m.sender_id] || {}).nickname || '');
   if (!botLeader(m.conv)) return;   // 多端在线时只让 leader 回复，避免人人代发
+  if (!botDedupe(m.conv, m.id)) return;   // 同一条消息只回一次
   botReply(m.conv, m.text, who);
 }
 // 小美主动冒泡已彻底关闭：不 @ 她、不私聊她，她就不发言
@@ -1509,6 +1541,8 @@ function refreshAll() {
     // 再过滤一道：白名单是权威，即使服务端因为 RLS 配置失误多返回了行也不进内存
     S.recent = (msgs || []).filter(function (m) { return canReadConv(m.conv); });
     S.lastId = S.recent.length ? S.recent[0].id : 0;
+    // 上线水位：这一刻之前存在的消息都算历史，小美不再追着答（防历史回填刷屏，见 botFresh）
+    if (!S.botFloor) S.botFloor = S.lastId;
     // 白名单可能因 recent 里的历史私聊会话而扩张，收敛一次
     rebuildMyConvs();
     if (S.me) S.me = S.profiles[S.uid] || S.me;
@@ -1764,10 +1798,12 @@ function tick() {
       rebuildMyConvs();
     }
     // 先消化消息：onNew 内部会做 canReadConv 判定
+    botBatchBegin();
     fresh.forEach(function (m) {
       if (m.id > S.lastId) S.lastId = m.id;
       onNew(m);
     });
+    botBatchEnd();
     updateTyping();
     if (heavy) {
       buildConvs();
@@ -1789,10 +1825,12 @@ function catchUpScoped() {
   var scope = myConvList();
   return q(db.from('messages').select('*').in('conv', scope).order('id', { ascending: false }).limit(200))
     .then(function (rows) {
+      botBatchBegin();
       (rows || []).forEach(function (m) {
         if (m.id > S.lastId) S.lastId = m.id;
         onNew(m);
       });
+      botBatchEnd();
       renderConvs(); updTitle();
     }).catch(function () { return null; });
 }
@@ -1843,7 +1881,7 @@ function onNew(m) {
   if (added) trackRecent(m);        // 让 recent 追上最新消息，侧栏预览才不回退
   if (added && !canRead) S.unread[m.conv] = (S.unread[m.conv] || 0) + 1;   // 未读增量（权威）
   if (added && isCurrent) renderMsgs();
-  if (added) maybeBotReply(m);
+  if (added) maybeBotReplyQueued(m);   // 走批次队列：一轮回填里同会话只留最新一条（防刷屏）
   if (added && !canRead && !c.muted) {
     notify(c.name, (m.conv.indexOf('g:') === 0 || m.conv === 'hall' ? (m.sender_name || '') + '：' : '') + preview(m));
     if (S.sound) beep();
@@ -3248,6 +3286,14 @@ window.LT = {
   agentProbe: function () { return agentProbe(); },
   botAgent: function (t, w0, c) { return botAgent(t, w0, c); },
   botAnswer: function (t, w0, c) { return botAnswer(t, w0, c); },
+  // 供测试断言「小美只接刚刚发生的消息」（防历史回填刷屏）
+  botFresh: function (m) { return botFresh(m); },
+  botBatchBegin: function () { return botBatchBegin(); },
+  botBatchEnd: function () { return botBatchEnd(); },
+  botBatchPeek: function () { return BOT_BATCH; },
+  maybeBotReplyQueued: function (m) { return maybeBotReplyQueued(m); },
+  get BOT_FRESH_MS() { return BOT_FRESH_MS; },
+  setBotFloor: function (v) { S.botFloor = v; return S.botFloor; },
   // 供测试断言会话隔离（安全边界）：白名单、判定、重建
   canReadConv: function (cv) { return canReadConv(cv); },
   rebuildMyConvs: function () { return rebuildMyConvs(); },
