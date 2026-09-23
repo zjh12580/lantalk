@@ -2460,7 +2460,8 @@ var CMDS = [
   { cmd: '#eth', sym: 'ethereum', label: '以太坊行情', desc: '实时价格 / 涨跌幅 / 成交量', arg: false },
   { cmd: '#股票', sym: '', label: '股票行情', desc: '# + 代码或名称：#600519 / #茅台 / #腾讯', arg: true },
   { cmd: '#help', sym: '', label: '指令帮助', desc: '列出全部可用预置指令', arg: false },
-  { cmd: '#分析', label: '聊天洞察', desc: '分析当前会话氛围/意图/好感信号（消耗 AI 额度）', arg: false }
+  { cmd: '#分析', label: '聊天洞察', desc: '分析当前会话氛围/意图/好感信号（消耗 AI 额度）', arg: false },
+  { cmd: '#新闻', label: '新闻速览', desc: 'The Guardian 全球头条（可加关键词：#新闻 科技）', arg: true }
 ];
 var DEFAULT_PH = '输入消息，Enter 发送，Shift+Enter 换行...';
 function fmtNum(n) {
@@ -2512,6 +2513,17 @@ function cardHtml(json) {
   } else if (c.plans) {
     plans = '<div class="plans"><div class="plh">💡 可以这样说</div><div class="pnohint">暂无可生成的建议</div></div>';
   }
+  var news = '';
+  if (c.news && c.news.length) {
+    news = '<div class="news">' + c.news.map(function (n) {
+      var img = n.thumb ? '<img class="nimg" src="' + attr(n.thumb) + '" alt="" loading="lazy">' : '';
+      var metaBits = [n.source, n.time ? fmtNewsTime(n.time) : ''].filter(Boolean);
+      var metaHtml = metaBits.length ? '<div class="nmeta">' + esc(metaBits.join(' · ')) + '</div>' : '';
+      var descHtml = n.desc ? '<div class="ndesc">' + esc(n.desc) + '</div>' : '';
+      return '<a class="nitem" href="' + attr(n.url) + '" target="_blank" rel="noopener">' +
+        img + '<div class="nbody"><div class="ntitle">' + esc(n.title) + '</div>' + metaHtml + descHtml + '</div></a>';
+    }).join('') + '</div>';
+  }
   return '<div class="card' + (plans ? ' wplans' : '') + '">' +
     '<div class="chd"><div class="clogo">' + esc(c.logo || '#') + '</div>' +
     '<div><div class="ctitle">' + esc(c.title || '行情') + '</div>' +
@@ -2533,6 +2545,10 @@ function parseHash(text) {
   var low = s.toLowerCase();
   if (low === 'analyze' || low === 'analyse' || s === '分析') return { kind: 'analyze' };
   if (low === 'help') return { kind: 'help' };
+  if (/^新闻(\s|$)/.test(s) || /^news(\s|$)/i.test(s)) {
+    var nq = s.replace(/^(新闻|news)\s*/i, '').trim();
+    return { kind: 'news', query: nq };
+  }
   var cryptoMap = { btc: 'bitcoin', bitcoin: 'bitcoin', eth: 'ethereum', ethereum: 'ethereum', doge: 'dogecoin', dogecoin: 'dogecoin' };
   if (cryptoMap[low]) return { kind: 'crypto', sym: cryptoMap[low] };
   var sec = null;
@@ -2590,6 +2606,39 @@ function resolveStock(q) {
     if (pick.m === 'hk') return 'hk' + pick.code;
     if (pick.m === 'us') return 'us' + pick.code.replace(/\..*$/, '').toUpperCase();
     return pick.m + pick.code;
+  });
+}
+var GUARDIAN_KEY = '541211ab-631c-460d-aeca-4fb6dd494147';  // The Guardian Open Platform；前端直连（CORS 已实测开放）。如泄露可在 open-platform.theguardian.com 重置
+function fmtNewsTime(iso) {
+  try { var d = new Date(iso); if (isNaN(d.getTime())) return '';
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  } catch (e) { return ''; }
+}
+function fetchGuardian(query) {
+  // The Guardian Open Platform：实测 CORS = access-control-allow-origin: *，前端直接 fetch，无需后端代理
+  var url = 'https://content.guardianapis.com/search?api-key=' + GUARDIAN_KEY +
+    '&page-size=8&order-by=newest&show-fields=headline,thumbnail,trailText,byline' +
+    (query ? '&q=' + encodeURIComponent(query) : '');
+  return fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.response || d.response.status !== 'ok') throw new Error('Guardian 接口返回异常');
+    var items = (d.response.results || []).map(function (it) {
+      var f = it.fields || {};
+      return {
+        title: f.headline || it.webTitle || '无标题',
+        url: it.webUrl || '',
+        thumb: f.thumbnail || '',
+        desc: f.trailText || '',
+        source: it.sectionName || '',
+        time: it.webPublicationDate || ''
+      };
+    }).filter(function (n) { return n.url; });
+    if (!items.length) throw new Error('没有找到相关新闻');
+    return {
+      logo: '📰', title: query ? ('新闻 · ' + query) : '新闻速览',
+      sub: 'The Guardian · 全球头条', wide: true, news: items,
+      foot: '数据来自 The Guardian Open Platform（仅 Guardian 内容，免费公开）'
+    };
   });
 }
 function fetchCrypto(sym) {
@@ -2752,6 +2801,7 @@ function handleHashCmd(text) {
   var prom;
   if (p.kind === 'crypto') prom = fetchCrypto(p.sym);
   else if (p.kind === 'stock') prom = fetchStock(p.sec, p.code);
+  else if (p.kind === 'news') prom = fetchGuardian(p.query);
   else prom = resolveStock(p.query).then(function (sec) { return fetchStock(sec, p.query); });
   prom.then(function (card) { postCard(card); })
     .catch(function (e) { postCard({ err: (e && e.message) || '查询失败' }); });
