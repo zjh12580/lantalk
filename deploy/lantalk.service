@@ -1,0 +1,45 @@
+# ============================================================================
+# lantalk.service —— systemd 单元（跑 cloud/server.js）
+# ----------------------------------------------------------------------------
+# 安装：
+#   sudo cp deploy/lantalk.service /etc/systemd/system/lantalk.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lantalk
+#   sudo systemctl status lantalk
+# ============================================================================
+[Unit]
+Description=LanTalk cloud app (static + 小美 Agent /api/chat)
+Documentation=file:///opt/lantalk/RELEASE.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=lantalk
+Group=lantalk
+WorkingDirectory=/opt/lantalk/cloud
+
+# .llm.json 是 gitignore 的本地密钥文件，随部署单独上传；
+# 其余可调项走这个 EnvironmentFile（缺省也不影响启动）。
+EnvironmentFile=-/opt/lantalk/cloud/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+ExecStart=/usr/bin/node /opt/lantalk/cloud/server.js
+
+Restart=always
+RestartSec=3
+# 日志：journalctl -u lantalk -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lantalk
+
+# 基本加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/lantalk
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+# ============================================================================
+# Caddyfile —— 单域名反代：应用 + 自托管 Supabase
+# ----------------------------------------------------------------------------
+# 把 chat.example.com 换成你自己的域名（必须已解析到本机公网 IP）。
+# Caddy 会自动向 Let's Encrypt 申请并续期 HTTPS 证书，无需手动配证书。
+#
+# 只需对外暴露 80 / 443；Supabase（8000）和应用（3000）都只监听本机。
+#
+# 用法：
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo sed -i 's/chat.example.com/你的域名/g' /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+# ============================================================================
+
+chat.example.com {
+	encode gzip zstd
+
+	# ---------- 自托管 Supabase 网关（Kong）----------
+	# 前端 supabaseUrl 配成 https://chat.example.com/sb
+	# supabase-js 会请求 /sb/auth/v1/*、/sb/rest/v1/*、/sb/storage/v1/*
+	handle /sb/* {
+		uri strip_prefix /sb
+		reverse_proxy 127.0.0.1:8000 {
+			# SSE / 长轮询不要缓冲
+			flush_interval -1
+		}
+	}
+
+	# ---------- 应用本体（静态资源 + /api/*）----------
+	# index.html / styles.css / cloud-shim.js / runtime-config.js / /api/chat …
+	# 全部由 Node（server.js）提供，单端口便于维护
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			# 小美走「提交任务 + 轮询结果」，但 /api/llm/stream 仍是 SSE
+			flush_interval -1
+		}
+	}
+
+	log {
+		output file /var/log/caddy/lantalk.log
+		format console
+	}
+}

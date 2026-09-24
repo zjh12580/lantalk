@@ -1,0 +1,40 @@
+{
+  "_comment": "小美 LLM 通道配置模板。复制为 .llm.json 后把 api_key 换成你自己的。按数组顺序尝试，前面的失败自动切下一个。任何 OpenAI 兼容（/chat/completions）的服务都能接。",
+  "_howto": "cp cloud/.llm.json.example cloud/.llm.json && 编辑 api_key；不需要的条目直接删掉。.llm.json 不入 Git，避免密钥泄露。",
+  "_notes": [
+    "自托管后没有平台网关的 60s 超时限制，timeout_ms 可以放宽，不必再为网关妥协。",
+    "推理模型（如 hy4-preview）会先吐 reasoning_content 思考链；服务端只收 content，不会把思考过程发进聊天室。",
+    "不要给推理模型硬传 temperature / max_tokens —— 采样参数常被锁定，max_tokens 过小会被思考链吃光导致正文为空。",
+    "少数上游流式下会把并发工具的多个 name 拼成畸形串（如 now_time</tool_call:xxx>web_search）。",
+    "  规避：给该通道加 \"stream\": false（走非流式，实测 100% 正常）或 \"parallel_tool_calls\": false。",
+    "timeout_ms：单通道超时上限，超时自动切下一通道。自托管环境建议：推理模型 90-120s，轻量模型 30-60s。"
+  ],
+  "channels": [
+    {
+      "name": "hy4",
+      "base_url": "https://tokenhub.tencentmaas.com/v1",
+      "api_key": "填你的 key",
+      "model": "hy4-preview",
+      "free": false,
+      "parallel_tool_calls": false,
+      "stream": false,
+      "timeout_ms": 100000
+    },
+    {
+      "name": "zhipu",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key": "填你的 key",
+      "model": "glm-4-flash",
+      "free": true,
+      "timeout_ms": 60000
+    },
+    {
+      "name": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "填你的 key",
+      "model": "deepseek-chat",
+      "free": false,
+      "timeout_ms": 60000
+    }
+  ]
+}

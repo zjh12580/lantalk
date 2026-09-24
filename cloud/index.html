@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <script src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@0.1.3/lib/index.global.js"></script>
+<!-- 自托管模式：先读运行时配置，再由适配壳按需接管 window.WorkBuddyCloud。
+     两者都只在 __LT_CONFIG__.mode === 'selfhost' 时生效，平台模式下完全不干预。 -->
+<script src="/runtime-config.js"></script>
+<script src="/cloud-shim.js"></script>
 <title>Let's Talk · 云端聊天</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2307c160'/%3E%3Cpath d='M14 32 L50 16 L40 50 L32 38 L14 32 Z' fill='white'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/styles.css">
@@ -279,8 +283,10 @@ if (!window.WorkBuddyCloud) {
     + '<p class="sub">云端组件加载失败（可能是网络不通）。请检查网络后刷新页面重试。</p></div></div>';
   return;
 }
-var ENDPOINT = 'https://lan-talk-v2.app.workbuddy.host';
-var PUBKEY = 'wbpk_MocLqF7DA4TT84NG1dttG2_9gNtzK1HkaGkE2Z7sIE2KY88QjKe3Xvj';
+// 平台模式用原值；自托管模式由 /runtime-config.js 注入覆盖（见 cloud-shim.js）
+var LTCFG = window.__LT_CONFIG__ || {};
+var ENDPOINT = LTCFG.endpoint || 'https://lan-talk-v2.app.workbuddy.host';
+var PUBKEY = LTCFG.publishableKey || 'wbpk_MocLqF7DA4TT84NG1dttG2_9gNtzK1HkaGkE2Z7sIE2KY88QjKe3Xvj';
 var CLOUD = window.WorkBuddyCloud.createWorkBuddyCloud({ endpoint: ENDPOINT, publishableKey: PUBKEY });
 var db = CLOUD.database;
 var st = CLOUD.storage;

@@ -91,7 +91,10 @@ function buildChannels() {
       parallelToolCalls: c.parallel_tool_calls === true ? true : (c.parallel_tool_calls === false ? false : undefined),
       // ⚠️ stream:false → 该通道走非流式整包响应。实测腾讯 TokenHub 流式下偶发把多个工具名
       //    拼成畸形 name（即使 parallel_tool_calls:false 也偶发），非流式则 100% 正常。
-      streamOff: c.stream === false });
+      streamOff: c.stream === false,
+      // ⚠️ 全局预算约束：线上反向代理 60s 就返回 504，所以**各通道超时之和必须 < 60s**
+      //    （前端还等一次 HTTP）。timeout_ms 让每个通道自己定上限，超了就让下一个通道上。
+      timeoutMs: Number(c.timeout_ms) > 0 ? Number(c.timeout_ms) : 0 });
   };
 
   if (Array.isArray(LLMCFG.channels)) LLMCFG.channels.forEach(push);
@@ -290,6 +293,21 @@ function shapeAnalyze(j) {
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 const CACHE_MAX = 200;
+
+/* ---------------------------------------------------------------------------
+ * 异步任务表（/api/chat?async=1）
+ * ⚠️ 为什么必须异步：线上反向代理（stgw）**60s 就把长请求判成 504**。
+ *    推理模型 hy4-preview 联网一轮要 40~70s，同步接口必然被网关掐断
+ *    （2026-09-23 实测：线上 60.0s 收到 504，前端只看到网络错误）。
+ *    所以改为「POST 立即返回 jobId → 前端轮询 GET /api/chat/result」，
+ *    每个 HTTP 请求都是秒级，后台任务可以踏实跑几分钟。
+ * -------------------------------------------------------------------------*/
+const JOBS = new Map();
+const JOB_TTL = 10 * 60 * 1000;
+function jobSweep() {
+  const now = Date.now();
+  JOBS.forEach((v, k) => { if (now - v.t > JOB_TTL) JOBS.delete(k); });
+}
 function cacheGet(k) {
   const v = cache.get(k);
   if (!v) return null;
@@ -523,7 +541,8 @@ function makeChatFn(preferStream) {
       try {
         const out = await callOpenAICompat(Object.assign(
           { base: ch.base, key: ch.key, model: ch.model, keyless: ch.keyless,
-            parallelToolCalls: ch.parallelToolCalls, streamOff: ch.streamOff }, opts));
+            parallelToolCalls: ch.parallelToolCalls, streamOff: ch.streamOff,
+            timeoutMs: ch.timeoutMs || undefined }, opts));
         out._channel = ch.name + ':' + ch.model;
         return out;
       } catch (e) {
@@ -686,6 +705,40 @@ const server = http.createServer(async (req, res) => {
     if (hit) return send(res, 200, Object.assign({ cached: true }, hit));
     const rl = rateHit('/api/chat', clientIp(req));
     if (rl) return sendTooMany(res, rl.retryAfter);
+
+    // 后台跑一单，把结果写进 JOBS（成功则顺带写结果缓存）
+    const runJob = async (job) => {
+      try {
+        const out = await AGENT.runAgent({ chat: makeChatFn(true), analyzeChat: makeAnalyzeChatFn() }, {
+          text,
+          who: payload.who,
+          scene: payload.scene,
+          mood: payload.mood,
+          memory: payload.memory,
+          history: Array.isArray(payload.history) ? payload.history : [],
+        });
+        if (out && out.ok) cacheSet(ck, out);
+        const rec = JOBS.get(job);
+        if (rec) { rec.done = true; rec.out = out; }
+      } catch (e) {
+        console.warn('[chat]', e.message);
+        const rec = JOBS.get(job);
+        if (rec) {
+          rec.done = true;
+          rec.out = { ok: false, reason: 'upstream', detail: String(e.message || e).slice(0, 300) };
+        }
+      }
+    };
+
+    // 异步模式：立即回 jobId（前端轮询）—— 绕开网关 60s 超时
+    if (payload.async === 1 || payload.async === true) {
+      jobSweep();
+      const job = 'j' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      JOBS.set(job, { t: Date.now(), done: false, out: null });
+      runJob(job);
+      return send(res, 200, { ok: true, pending: true, job: job });
+    }
+
     try {
       const out = await AGENT.runAgent({ chat: makeChatFn(true), analyzeChat: makeAnalyzeChatFn() }, {
         text,
@@ -701,6 +754,58 @@ const server = http.createServer(async (req, res) => {
       console.warn('[chat]', e.message);
       return send(res, 200, { ok: false, fallback: true, reason: 'upstream', detail: String(e.message || e).slice(0, 300) });
     }
+  }
+
+  // 轮询任务结果：秒级返回，永远不会撞上网关超时
+  if (url.pathname === '/api/chat/result' && req.method === 'GET') {
+    const id = url.searchParams.get('id') || '';
+    const rec = JOBS.get(id);
+    if (!rec) return send(res, 200, { ok: false, reason: 'unknown_job' });
+    if (!rec.done) return send(res, 200, { ok: true, done: false });
+    JOBS.delete(id);
+    const out = rec.out || { ok: false, reason: 'empty_job' };
+    return send(res, 200, Object.assign({ done: true, channel: out.model || '' }, out));
+  }
+
+  // ---------------------------------------------------------------------------
+  // 自托管适配壳（cloud-shim.js）的 llm 通道。
+  // 平台模式下前端走 CLOUD.llm（WorkBuddy 网关）；自托管模式没有该网关，
+  // 由这里复用通道链 + 回退，转成 OpenAI 风格的 SSE 给前端。
+  // ---------------------------------------------------------------------------
+  if (url.pathname === '/api/models' && req.method === 'GET') {
+    return send(res, 200, {
+      object: 'list',
+      data: CHANNELS.map((c, i) => ({ id: c.model, object: 'model', owned_by: c.name, primary: i === 0, free: !!c.free })),
+    });
+  }
+  if (url.pathname === '/api/llm/stream' && req.method === 'POST') {
+    if (!CHANNELS.length) return send(res, 200, { error: { message: 'no_llm_channel' } });
+    let payload;
+    try { payload = JSON.parse((await readBody(req, 128 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const msgs = Array.isArray(payload.messages) ? payload.messages : [];
+    if (!msgs.length) return send(res, 400, { error: { message: 'empty_messages' } });
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',      // 让反向代理别缓冲 SSE
+    });
+    const push = (delta) => res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: delta } }] }) + '\n\n');
+    let wrote = false;
+    try {
+      const out = await makeChatFn(true)({
+        messages: msgs,
+        disableTools: true,
+        onDelta: (d) => { wrote = true; push(d); },
+      });
+      if (!wrote && out && out.content) push(out.content);
+      res.write('data: [DONE]\n\n');
+    } catch (e) {
+      console.warn('[llm]', e.message);
+      res.write('data: ' + JSON.stringify({ error: { message: String(e.message || e).slice(0, 200) } }) + '\n\n');
+    }
+    return res.end();
   }
 
   // 聊天洞察：把一段对话的 self/other 消息发给 Jev，返回情绪/意图/好感/质量/建议

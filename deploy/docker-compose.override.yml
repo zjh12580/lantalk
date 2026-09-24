@@ -1,0 +1,27 @@
+# ============================================================================
+# docker-compose.override.yml —— 对官方 Supabase 编排的最小增强
+# ----------------------------------------------------------------------------
+# 放在 /opt/supabase/docker/ 下，docker compose 会**自动合并**它，
+# 无需修改官方 docker-compose.yml（便于以后升级官方编排）。
+#
+# 做两件事：
+#   1. 挂载自定义邮件模板，让登录邮件里出现 6 位数字验证码（{{ .Token }}）
+#   2. 把 auth 的站点地址/重定向收紧到自己的域名
+# ============================================================================
+services:
+  auth:
+    volumes:
+      - ./templates:/templates:ro
+    environment:
+      # 用自定义模板覆盖内置的「只有链接」版本
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: /templates/magic_link.html
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Let's Talk 登录验证码
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: /templates/magic_link.html
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Let's Talk 登录验证码
+      GOTRUE_MAILER_TEMPLATES_RECOVERY: /templates/magic_link.html
+      GOTRUE_MAILER_SUBJECTS_RECOVERY: Let's Talk 重置密码验证码
+      # 会话有效期：一周，减少重复登录
+      GOTRUE_JWT_EXP: 604800
+      # 关掉不需要的登录方式，减少攻击面
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"

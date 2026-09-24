@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     登录验证码邮件模板（GoTrue magic-link 模板位）
+     ----------------------------------------------------------------------------
+     ⚠️ 关键：必须包含 {{ .Token }}，前端才有 6 位数字码可填。
+        Supabase/GoTrue 内置模板只有 {{ .ConfirmationURL }}（点击登录链接），
+        不含数字验证码 —— 不改模板的话，用户会收到一封「点链接登录」的邮件，
+        而我们的登录框要求填验证码，直接卡死。
+     ========================================================================== -->
+<html lang="zh-CN">
+<body style="margin:0;padding:24px;background:#f6f7f9;font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;color:#1f2329">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:32px 28px;box-shadow:0 2px 12px rgba(0,0,0,.06)">
+    <h2 style="margin:0 0 8px;font-size:18px">Let's Talk · 登录验证码</h2>
+    <p style="margin:0 0 20px;color:#646a73;font-size:14px">请在下方的输入框中填写这串验证码：</p>
+
+    <div style="text-align:center;margin:0 0 20px">
+      <div style="display:inline-block;background:#f2f3f5;border-radius:8px;padding:14px 28px;
+                  font-size:30px;font-weight:700;letter-spacing:8px;color:#07c160">{{ .Token }}</div>
+    </div>
+
+    <p style="margin:0;color:#8f959e;font-size:13px;line-height:1.7">
+      · 验证码 1 小时内有效，请勿转发给他人<br>
+      · 若不是你本人操作，忽略本邮件即可
+    </p>
+
+    <hr style="border:none;border-top:1px solid #f0f0f0;margin:22px 0">
+    <p style="margin:0;color:#b0b5bd;font-size:12px">
+      Your verification code is <b>{{ .Token }}</b>. It expires in 1 hour.
+      If you didn't request this, you can safely ignore this email.
+    </p>
+  </div>
+</body>
+</html>

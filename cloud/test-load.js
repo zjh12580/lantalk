@@ -2215,8 +2215,9 @@ function makeStub() {
       '分析结论以系统提示注入上下文（模型据策略作答）');
     log(AJS.indexOf('USER_ANALYZE_PLACEHOLDER') < 0 && AJS.indexOf("trace.push({ tool: 'analyze'") >= 0,
       'trace 记录分析层结论，便于线上排查');
-    log(AJS.indexOf('const presetHit = trace.some') >= 0
-      && AJS.indexOf('const maxTurns = presetHit ? 2 : MAX_TURNS') >= 0,
+    log(/const presetHit = trace\.some/.test(AJS)
+      && /const maxTurns = presetHit \? \d+ : MAX_TURNS/.test(AJS)
+      && /const maxToolCalls = presetHit \? \d+ : MAX_TOOL_CALLS/.test(AJS),
       '预检索命中后收紧轮次与工具预算（推理模型别反复搜）');
     log(/const DEFAULT_TIMEOUT = 90000/.test(AJS), '单轮超时放宽到 90s（推理模型思考慢）');
     log(/S\.botTypingUntil = Date\.now\(\) \+ 180000/.test(IJS), '「输入中」预算覆盖长推理（3 分钟）');
@@ -2636,6 +2637,38 @@ function makeStub() {
       S2.gameOpen = null;
       const gr = D.querySelector('#groom'); if (gr) gr.classList.add('hidden');
     }
+  }
+
+  // ---- 自托管迁移：适配壳 / 运行时配置 / 新端点 ----
+  {
+    const fsx2 = require('fs');
+    const pathx2 = require('path');
+    const IJS2 = fsx2.readFileSync(pathx2.join(__dirname, 'index.html'), 'utf8');
+    const SJS2 = fsx2.readFileSync(pathx2.join(__dirname, 'server.js'), 'utf8');
+
+    log(IJS2.indexOf('/cloud-shim.js') >= 0, 'index.html 引入自托管适配壳 cloud-shim.js');
+    log(IJS2.indexOf('/runtime-config.js') >= 0, 'index.html 引入运行时配置 runtime-config.js');
+    log(IJS2.indexOf('window.__LT_CONFIG__') >= 0 && IJS2.indexOf('LTCFG.endpoint ||') >= 0,
+      'ENDPOINT/PUBKEY 支持运行时覆盖');
+    log(IJS2.indexOf('https://lan-talk-v2.app.workbuddy.host') >= 0,
+      '平台模式默认值未被破坏（仍指向原域名）');
+
+    const SHIM2 = fsx2.readFileSync(pathx2.join(__dirname, 'cloud-shim.js'), 'utf8');
+    log(SHIM2.indexOf("cfg.mode !== 'selfhost'") >= 0, '适配壳只在自托管模式接管（平台模式零干预）');
+    log(SHIM2.indexOf('createWorkBuddyCloud') >= 0, '适配壳暴露同名 createWorkBuddyCloud 接口');
+    log(SHIM2.indexOf('sharedPath') >= 0 && SHIM2.indexOf('createSignedUrl') >= 0
+      && SHIM2.indexOf('getAccessToken') >= 0 && SHIM2.indexOf('getSession') >= 0,
+      '适配壳覆盖 storage/auth 全部在用方法');
+    log(SHIM2.indexOf('signInWithOtp') >= 0 && SHIM2.indexOf("type: 'recovery'") >= 0,
+      '邮箱验证码 / 重置密码走 Supabase signInWithOtp / verifyOtp');
+    log(SHIM2.indexOf('from: function') >= 0 && SHIM2.indexOf('rpc: function') >= 0,
+      'database 同构透传（PostgREST 风格，业务代码零改动）');
+
+    log(SJS2.indexOf("url.pathname === '/api/llm/stream'") >= 0, 'server.js 提供 /api/llm/stream（适配壳 llm 通道）');
+    log(SJS2.indexOf("url.pathname === '/api/models'") >= 0, 'server.js 提供 /api/models');
+
+    const RTCFG2 = fsx2.readFileSync(pathx2.join(__dirname, 'runtime-config.js'), 'utf8');
+    log(RTCFG2.indexOf("mode: 'platform'") >= 0, 'runtime-config.js 默认平台模式（不影响线上）');
   }
 
   log(errors.length === 0, '运行期间无 JS 异常', errors.join(' | '));
