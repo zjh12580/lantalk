@@ -36,6 +36,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const AGENT = require('./agent.js');
+// 精简自建数据层（lite 模式：SQLite + 自建鉴权/存储）。
+// ⚠️ 这里只是 require，真正加载 node:sqlite 在 liteInit() 里——
+//    平台模式（不启用 lite）下不会碰 SQLite，老部署零影响。
+const LITEDB = require('./lite-db.js');
+const LITEMAIL = require('./lite-mail.js');
 
 const ROOT = __dirname;
 
@@ -648,6 +653,118 @@ function readBody(req, limit) {
   });
 }
 
+/* ---------------------------------------------------------------------------
+ * 精简自建模式（lite）：SQLite 数据层 + 自建鉴权 + 本地存储
+ * ---------------------------------------------------------------------------
+ * 为什么需要：服务器只有 1.8G 内存且没有 root，跑不了自托管 Supabase 全家桶。
+ * 于是把 Postgres/PostgREST/RLS 换成 SQLite/本文件/代码层鉴权，
+ * 对外接口形状与原来保持一致，前端 index.html 业务代码零改动。
+ *
+ * 开关：环境变量 LITE=1（或存在 cloud/.lite.json）即启用。
+ * -------------------------------------------------------------------------*/
+const LITE_ENABLED = process.env.LITE === '1' || fs.existsSync(path.join(ROOT, '.lite.json'));
+let LITE = null;
+
+function liteInit() {
+  if (!LITE_ENABLED || LITE) return LITE;
+  const cfgPath = path.join(ROOT, '.lite.json');
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch (e) { cfg = {}; }
+
+  const dataDir = process.env.LITE_DATA_DIR || cfg.dataDir || path.join(ROOT, 'data');
+  const dbFile = process.env.LITE_DB || cfg.db || path.join(dataDir, 'lantalk.db');
+  const storeDir = process.env.LITE_STORAGE || cfg.storage || path.join(dataDir, 'storage');
+
+  // 会话签名密钥：不落盘会每次重启把所有人踢下线，所以生成一次就存进 .lite.json
+  if (!cfg.secret) {
+    cfg.secret = require('crypto').randomBytes(32).toString('hex');
+    try { fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2)); } catch (e) {
+      console.warn('[lite] .lite.json 写入失败，会话密钥不持久（重启后需重新登录）');
+    }
+  }
+
+  try {
+    fs.mkdirSync(storeDir, { recursive: true });
+    const db = LITEDB.openDb(dbFile);
+    LITE = {
+      db, cfg, storeDir, dbFile,
+      secret: cfg.secret,
+      mail: {
+        host: process.env.SMTP_HOST || cfg.smtpHost || '',
+        port: Number(process.env.SMTP_PORT || cfg.smtpPort || 465),
+        user: process.env.SMTP_USER || cfg.smtpUser || '',
+        pass: process.env.SMTP_PASS || cfg.smtpPass || '',
+        from: process.env.SMTP_FROM || cfg.smtpFrom || (process.env.SMTP_USER || cfg.smtpUser || ''),
+        fromName: cfg.smtpFromName || '云聊 Let\'s Talk',
+      },
+      echo: process.env.LITE_OTP_ECHO === '1' || cfg.otpEcho === true,
+    };
+    console.log('[lite] 精简自建模式已启用 db=' + dbFile);
+    if (!LITE.mail.host) console.warn('[lite] ⚠️ 未配置 SMTP —— 验证码只写日志，用户收不到邮件（配 .lite.json 的 smtpHost/smtpUser/smtpPass）');
+  } catch (e) {
+    console.error('[lite] 初始化失败：' + (e && e.message || e));
+    LITE = null;
+  }
+  return LITE;
+}
+
+/* 从请求里取会话：优先 Authorization 头，其次 cookie（<img> 加载图片只会带 cookie） */
+function liteSession(req) {
+  if (!LITE) return null;
+  const h = String(req.headers.authorization || '');
+  let tok = '';
+  if (h.indexOf('Bearer ') === 0) tok = h.slice(7);
+  if (!tok) {
+    const c = String(req.headers.cookie || '');
+    const m = c.match(/(?:^|;\s*)lt_tok=([^;]+)/);
+    if (m) tok = decodeURIComponent(m[1]);
+  }
+  if (!tok) return null;
+  const p = LITEDB.verifyToken(tok, LITE.secret);
+  return p ? { uid: p.uid, email: p.email, token: tok } : null;
+}
+
+function liteSendCode(email, purpose) {
+  const code = LITEDB.newOtp(LITE.db, email, purpose);
+  const subject = purpose === 'reset' ? '【云聊】重置密码验证码' : '【云聊】登录验证码';
+  const text = '你的验证码是 ' + code + '，10 分钟内有效。\n\n如果这不是你本人操作，忽略本邮件即可。';
+  const m = LITE.mail;
+  if (!m.host) {
+    console.warn('[lite] 验证码（未配 SMTP，仅写日志） ' + email + ' -> ' + code);
+    return Promise.resolve({ ok: false, reason: 'no_smtp', code: LITE.echo ? code : undefined });
+  }
+  return LITEMAIL.sendMail({
+    host: m.host, port: m.port, user: m.user, pass: m.pass,
+    from: m.from, fromName: m.fromName, to: email, subject, text,
+  }).then((r) => (r.ok ? { ok: true, code: LITE.echo ? code : undefined } : { ok: false, reason: r.error }));
+}
+
+/* 签发会话（前端形状与 Supabase 一致：session.user.id / access_token） */
+function liteIssue(user) {
+  const token = LITEDB.signToken(
+    { uid: user.id, email: user.email, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30 },
+    LITE.secret);
+  return { access_token: token, token_type: 'bearer', expires_in: 60 * 60 * 24 * 30, user: { id: user.id, email: user.email } };
+}
+
+function liteUserRow(id, email) {
+  return { id, email, password_hash: '', created_at: new Date().toISOString() };
+}
+
+/* 读原始二进制 body（文件上传用，避免 base64 膨胀吃内存） */
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let n = 0; const chunks = [];
+    req.on('data', (c) => {
+      n += c.length;
+      if (n > limit) { reject(new Error('body too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
 
@@ -808,6 +925,148 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  /* ============================ lite：自建数据层 ============================ */
+  if (LITE && url.pathname === '/api/db' && req.method === 'POST') {
+    const sess = liteSession(req);
+    if (!sess) return send(res, 401, { error: { message: '未登录', code: '401' } });
+    let plan;
+    try { plan = JSON.parse((await readBody(req, 256 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const out = LITEDB.execQuery(LITE.db, plan, sess.uid);
+    return send(res, out.error ? 200 : 200, out);
+  }
+
+  /* ============================ lite：自建鉴权 ============================ */
+  if (LITE && url.pathname === '/api/auth/sendotp' && req.method === 'POST') {
+    let p;
+    try { p = JSON.parse((await readBody(req, 8 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const email = String(p.email || '').trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return send(res, 200, { error: { message: '邮箱格式不正确' } });
+    const exists = !!LITE.db.prepare('select 1 from users where email = ?').get(email);
+    const r = await liteSendCode(email, 'login');
+    if (!r.ok && !r.code) return send(res, 200, { error: { message: '验证码发送失败：' + (r.reason || '未知原因') } });
+    // verificationId 只做「这一步的凭证」，前端不解析内容
+    return send(res, 200, {
+      data: {
+        verificationId: LITEDB.signToken({ email: email, scope: 'otp', exp: Math.floor(Date.now() / 1000) + 600 }, LITE.secret),
+        isExistingUser: exists,
+        devCode: r.code || undefined,      // 仅 LITE_OTP_ECHO=1 时才有
+      },
+    });
+  }
+
+  if (LITE && url.pathname === '/api/auth/verify' && req.method === 'POST') {
+    let p;
+    try { p = JSON.parse((await readBody(req, 8 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const email = String(p.email || '').trim().toLowerCase();
+    const chk = LITEDB.checkOtp(LITE.db, email, String(p.token || '').trim(), 'login');
+    if (!chk.ok) return send(res, 200, { error: { message: chk.reason } });
+    let u = LITE.db.prepare('select * from users where email = ?').get(email);
+    if (!u) {
+      const id = LITEDB.newId();
+      LITE.db.prepare('insert into users (id, email, password_hash) values (?,?,?)')
+        .run(id, email, p.password ? LITEDB.hashPassword(String(p.password)) : '');
+      u = LITE.db.prepare('select * from users where email = ?').get(email);
+    } else if (p.password) {
+      LITE.db.prepare('update users set password_hash = ? where id = ?')
+        .run(LITEDB.hashPassword(String(p.password)), u.id);
+    }
+    return send(res, 200, { data: { session: liteIssue(u) } });
+  }
+
+  if (LITE && url.pathname === '/api/auth/password' && req.method === 'POST') {
+    let p;
+    try { p = JSON.parse((await readBody(req, 8 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const email = String(p.email || '').trim().toLowerCase();
+    const u = LITE.db.prepare('select * from users where email = ?').get(email);
+    if (!u || !u.password_hash || !LITEDB.verifyPassword(String(p.password || ''), u.password_hash)) {
+      return send(res, 200, { error: { message: '邮箱或密码不正确' } });
+    }
+    return send(res, 200, { data: { session: liteIssue(u) } });
+  }
+
+  if (LITE && url.pathname === '/api/auth/reset' && req.method === 'POST') {
+    let p;
+    try { p = JSON.parse((await readBody(req, 8 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const email = String(p.email || '').trim().toLowerCase();
+    const u = LITE.db.prepare('select 1 from users where email = ?').get(email);
+    if (!u) return send(res, 200, { error: { message: '该邮箱未注册' } });
+    const r = await liteSendCode(email, 'reset');
+    if (!r.ok && !r.code) return send(res, 200, { error: { message: '验证码发送失败：' + (r.reason || '未知原因') } });
+    return send(res, 200, { data: { ok: true, devCode: r.code || undefined } });
+  }
+
+  if (LITE && url.pathname === '/api/auth/reset/confirm' && req.method === 'POST') {
+    let p;
+    try { p = JSON.parse((await readBody(req, 8 * 1024)) || '{}'); }
+    catch (e) { return send(res, 400, { error: { message: 'bad_json' } }); }
+    const email = String(p.email || '').trim().toLowerCase();
+    const chk = LITEDB.checkOtp(LITE.db, email, String(p.nonce || '').trim(), 'reset');
+    if (!chk.ok) return send(res, 200, { error: { message: chk.reason } });
+    const u = LITE.db.prepare('select * from users where email = ?').get(email);
+    if (!u) return send(res, 200, { error: { message: '该邮箱未注册' } });
+    LITE.db.prepare('update users set password_hash = ? where id = ?')
+      .run(LITEDB.hashPassword(String(p.password || '')), u.id);
+    return send(res, 200, { data: { session: liteIssue(u) } });
+  }
+
+  if (LITE && url.pathname === '/api/auth/session' && req.method === 'GET') {
+    const sess = liteSession(req);
+    if (!sess) return send(res, 200, { data: { session: null } });
+    return send(res, 200, { data: { session: { access_token: sess.token, user: { id: sess.uid, email: sess.email } } } });
+  }
+
+  if (LITE && url.pathname === '/api/auth/signout' && req.method === 'POST') {
+    return send(res, 200, { data: { ok: true } });   // token 无状态，前端清本地即可
+  }
+
+  /* ============================ lite：本地存储 ============================ */
+  if (LITE && url.pathname === '/api/storage/upload' && req.method === 'POST') {
+    const sess = liteSession(req);
+    if (!sess) return send(res, 401, { error: { message: '未登录' } });
+    const rel = String(url.searchParams.get('path') || '');
+    // 只能写进自己的目录：{uid}/...
+    if (!rel || rel.indexOf(sess.uid + '/') !== 0 || rel.indexOf('..') >= 0) {
+      return send(res, 200, { error: { message: '非法存储路径' } });
+    }
+    const abs = path.join(LITE.storeDir, rel);
+    if (abs.indexOf(LITE.storeDir) !== 0) return send(res, 200, { error: { message: '非法存储路径' } });
+    let buf;
+    try { buf = await readRaw(req, 20 * 1024 * 1024); }
+    catch (e) { return send(res, 200, { error: { message: '文件过大或读取失败' } }); }
+    try {
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, buf);
+      return send(res, 200, { data: { path: rel } });
+    } catch (e) { return send(res, 200, { error: { message: '写入失败：' + (e && e.message || e) } }); }
+  }
+
+  if (LITE && url.pathname.indexOf('/api/storage/f/') === 0 && req.method === 'GET') {
+    if (!liteSession(req)) { res.writeHead(401); return res.end('unauthorized'); }
+    const rel = decodeURIComponent(url.pathname.slice('/api/storage/f/'.length));
+    if (!rel || rel.indexOf('..') >= 0) { res.writeHead(400); return res.end('bad path'); }
+    const abs = path.join(LITE.storeDir, rel);
+    if (abs.indexOf(LITE.storeDir) !== 0) { res.writeHead(400); return res.end('bad path'); }
+    if (!fs.existsSync(abs)) { res.writeHead(404); return res.end('not found'); }
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
+      'Cache-Control': 'public, max-age=86400',
+    });
+    return fs.createReadStream(abs).pipe(res);
+  }
+
+  if (LITE && url.pathname === '/api/storage/stat' && req.method === 'GET') {
+    if (!liteSession(req)) return send(res, 401, { error: { message: '未登录' } });
+    const rel = String(url.searchParams.get('path') || '');
+    if (!rel || rel.indexOf('..') >= 0) return send(res, 200, { data: { exists: false } });
+    const abs = path.join(LITE.storeDir, rel);
+    return send(res, 200, { data: { exists: fs.existsSync(abs) && abs.indexOf(LITE.storeDir) === 0 } });
+  }
+
   // 聊天洞察：把一段对话的 self/other 消息发给 Jev，返回情绪/意图/好感/质量/建议
   if (url.pathname === '/api/analyze' && req.method === 'GET') {
     return send(res, 200, { ok: true, enabled: !!API_KEY, model: MODEL });
@@ -875,6 +1134,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (require.main === module) {
+  liteInit();     // 精简自建模式：读 .lite.json / 环境变量，开 SQLite
   // ⚠️ 必须绑 0.0.0.0：部署环境通过反向代理访问单端口，只绑 localhost 会导致外部连不上
   server.listen(PORT, '0.0.0.0', () => {
     console.log('[cloud] listening on 0.0.0.0:' + PORT

@@ -2654,7 +2654,48 @@ function makeStub() {
       '平台模式默认值未被破坏（仍指向原域名）');
 
     const SHIM2 = fsx2.readFileSync(pathx2.join(__dirname, 'cloud-shim.js'), 'utf8');
-    log(SHIM2.indexOf("cfg.mode !== 'selfhost'") >= 0, '适配壳只在自托管模式接管（平台模式零干预）');
+    log(SHIM2.indexOf("if (MODE !== 'lite' && MODE !== 'selfhost') return;") >= 0,
+      '适配壳只在自建模式接管（lite / selfhost），平台模式零干预');
+    log(SHIM2.indexOf("var MODE = cfg.mode;") >= 0 && SHIM2.indexOf("if (MODE === 'lite') {") >= 0,
+      '适配壳支持 lite 模式（精简自建：SQLite + 自建鉴权，1~2G 小鸡可跑）');
+    log(SHIM2.indexOf("createSignedUrl: function (p) {") >= 0
+      && SHIM2.indexOf('/api/storage/f/') >= 0,
+      'lite 存储：图片走 /api/storage/f/<path>（靠 cookie 鉴权，img 标签不会带头）');
+    log(SHIM2.indexOf("document.cookie = 'lt_tok=") >= 0,
+      'lite 登录同时写 cookie（否则聊天里的图片全是 401）');
+
+    // ---- 精简自建数据层（lite-db.js）：SQLite 复刻 Postgres RLS ----
+    const LDBP = pathx2.join(__dirname, 'lite-db.js');
+    const LDB = fsx2.existsSync(LDBP) ? fsx2.readFileSync(LDBP, 'utf8') : '';
+    log(LDB.length > 0, '存在精简自建数据层 lite-db.js');
+    if (LDB.length) {
+      ['profiles', 'groups', 'group_members', 'messages', 'reads', 'friends', 'games']
+        .forEach(function (t) {
+          log(LDB.indexOf(t + ': {') >= 0, 'lite 表白名单含 ' + t + '（列名不在白名单一律拒绝）');
+        });
+      log(LDB.indexOf("throw new Error('bad_column:'") >= 0, '列名/表名白名单防注入（列不在白名单直接报错）');
+      log(LDB.indexOf("return err('update_without_filter')") >= 0
+        && LDB.indexOf("return err('delete_without_filter')") >= 0,
+        'update/delete 必须带条件（防全表误改误删）');
+      log(LDB.indexOf('function canReadConv') >= 0 && LDB.indexOf("c.indexOf('g:') === 0") >= 0
+        && LDB.indexOf("c.indexOf('p:') === 0") >= 0,
+        '会话可读判定复刻 Postgres chat_can_read（群/私聊/大厅）');
+      log(LDB.indexOf('function execQuery(db, plan, uid)') >= 0 && LDB.indexOf("if (!uid) return err('unauthenticated'") >= 0,
+        '所有数据操作强制要求会话 uid（无 RLS 就靠代码层兜底）');
+      log(LDB.indexOf("if (table === 'messages' && row.sender_id !== uid)") >= 0
+        && LDB.indexOf("if (table === 'profiles' && payload.id !== uid)") >= 0,
+        '逐行校验归属：冒充他人发消息 / 替别人建资料都被拒');
+      log(LDB.indexOf('const JSON_COLS') >= 0 && LDB.indexOf('function decodeJson') >= 0,
+        'JSON 列（mentions/reply_to/board/moves）读写自动序列化');
+      log(LDB.indexOf('crypto.scryptSync') >= 0 && LDB.indexOf('timingSafeEqual') >= 0,
+        '密码用 scrypt 哈希 + 定时安全比较');
+      log(LDB.indexOf('createHmac(\'sha256\'') >= 0 && LDB.indexOf('if (p.exp && Date.now() / 1000 > p.exp)') >= 0,
+        '会话 token 用 HMAC 签名且有过期校验（无状态，不占内存）');
+      log(LDB.indexOf('pragma journal_mode = WAL') >= 0, 'SQLite 开 WAL（读不阻塞写，IM 场景必需）');
+      log(fsx2.existsSync(pathx2.join(__dirname, 'lite-mail.js'))
+        && fsx2.readFileSync(pathx2.join(__dirname, 'lite-mail.js'), 'utf8').indexOf('AUTH LOGIN') >= 0,
+        '自带零依赖 SMTP 发信（验证码邮件，不依赖 npm 装包）');
+    }
     log(SHIM2.indexOf('createWorkBuddyCloud') >= 0, '适配壳暴露同名 createWorkBuddyCloud 接口');
     log(SHIM2.indexOf('sharedPath') >= 0 && SHIM2.indexOf('createSignedUrl') >= 0
       && SHIM2.indexOf('getAccessToken') >= 0 && SHIM2.indexOf('getSession') >= 0,

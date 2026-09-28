@@ -1,24 +1,266 @@
 /* ============================================================================
  * cloud-shim.js —— 自托管适配壳
  * ----------------------------------------------------------------------------
- * 作用：把原本依赖 WorkBuddy 云平台的 window.WorkBuddyCloud SDK，替换为
- *       自托管 Supabase（Auth / PostgREST / Storage）+ 自建 Node 服务的实现。
+ * 作用：把原本依赖 WorkBuddy 云平台的 window.WorkBuddyCloud SDK，替换为自建实现，
+ *       让 index.html 里几十处 CLOUD.* 调用一行业务代码都不用改。
  *
- * 为什么能这么干：原云端 SDK 的数据层本来就是 Supabase 形态
- *   （db.from('t').select().eq()...、auth.uid()、RLS、authenticated 角色），
- *   所以 database 直接透传 supabase-js 即可，auth / storage 只需做一层字段名映射。
+ * 两种自建模式（由 window.__LT_CONFIG__.mode 决定）：
  *
- * 启用条件（两条都满足才接管，否则完全不碰平台 SDK）：
- *   1. window.__LT_CONFIG__.mode === 'selfhost'
- *   2. window.supabase 已加载（shim 会自动注入 supabase-js 的 CDN）
+ *   1. 'lite'     —— 精简自建（默认推荐，1~2G 小鸡也能跑）
+ *      Node 内置 SQLite + server.js 里的 /api/db、/api/auth、/api/storage。
+ *      零第三方依赖、无 Docker、无 Supabase。PostgREST 风格的链式调用由本文件的
+ *      查询构建器收集，打包成一份 plan 发给 /api/db 执行。
  *
- * 对 index.html 的要求：一行业务代码都不用改。只需在 <head> 里引入本文件。
+ *   2. 'selfhost' —— 自托管 Supabase（需 4G+ 内存）
+ *      database 直接透传 supabase-js（原云端 SDK 本来就是 Supabase 形态），
+ *      auth / storage 只做一层字段名映射。
+ *
+ * 启用条件：mode 必须是上面两者之一，否则完全不碰平台 SDK（平台模式零干预）。
+ *
+ * 对 index.html 的要求：只需在 <head> 里引入本文件。
  * ==========================================================================*/
 (function () {
   'use strict';
 
   var cfg = window.__LT_CONFIG__ || {};
-  if (cfg.mode !== 'selfhost') return;            // 平台模式：什么都不做
+  var MODE = cfg.mode;
+  if (MODE !== 'lite' && MODE !== 'selfhost') return;    // 平台模式：什么都不做
+
+  var API_BASE = (cfg.apiBase || '').replace(/\/+$/, '');   // 空串 = 同源
+
+  /* ---------------- 两种模式共用：LLM 转发到自建 server.js ---------------- */
+  // 前端仅 botLLM 兜底路径用到 /api/llm/stream（OpenAI 风格 SSE）
+  function parseSSE(res, onDelta) {
+    return new Promise(function (resolve, reject) {
+      var reader = res.body.getReader();
+      var dec = new TextDecoder();
+      var buf = '';
+      (function pump() {
+        reader.read().then(function (r) {
+          if (r.done) return resolve();
+          buf += dec.decode(r.value, { stream: true });
+          var lines = buf.split('\n');
+          buf = lines.pop();
+          lines.forEach(function (ln) {
+            ln = ln.trim();
+            if (ln.indexOf('data:') !== 0) return;
+            var payload = ln.slice(5).trim();
+            if (payload === '[DONE]') return;
+            try { onDelta(JSON.parse(payload)); } catch (e) { /* 忽略心跳等非 JSON 行 */ }
+          });
+          pump();
+        }).catch(reject);
+      })();
+    });
+  }
+  var llm = {
+    models: {
+      list: function () {
+        return fetch(API_BASE + '/api/models')
+          .then(function (r) { return r.json(); })
+          .then(function (j) { return { data: (j && j.data) || [], error: null }; })
+          .catch(function (e) { return { data: [], error: e }; });
+      },
+    },
+    chat: {
+      completions: {
+        // 与原用法一致：async iterable，yield {choices:[{delta:{content}}]}
+        create: function (req) {
+          var it = (async function* () {
+            var res = await fetch(API_BASE + '/api/llm/stream', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: req.model,
+                messages: req.messages,
+                temperature: req.temperature,
+              }),
+              signal: req.signal,
+            });
+            if (!res.ok || !res.body) throw new Error('llm ' + res.status);
+            var queue = [];
+            await parseSSE(res, function (chunk) { queue.push(chunk); });
+            while (queue.length) yield queue.shift();
+          })();
+          return it;
+        },
+      },
+    },
+  };
+
+  /* ---------------- 两种模式共用：组装并暴露 SDK ---------------- */
+  function wire_common(parts) {
+    window.WorkBuddyCloud = {
+      createWorkBuddyCloud: function () {
+        return {
+          auth: parts.auth, database: parts.database, storage: parts.storage,
+          llm: llm, _selfhost: true, _mode: MODE,
+        };
+      },
+    };
+    window.__LT_SHIM_READY = true;
+  }
+
+  /* ==========================================================================
+   * 模式一：lite —— 精简自建（SQLite + 自建鉴权 + 本地存储）
+   * ========================================================================*/
+  if (MODE === 'lite') {
+    var TOKEN_KEY = 'lt_lite_tok';
+
+    function getTok() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+    function setTok(t) {
+      try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e) { /* 隐私模式 */ }
+      // ⚠️ 图片是 <img src> 加载的，不会带 Authorization 头 —— 必须同时写 cookie，
+      //    服务端 /api/storage/f/* 才能认出是谁（否则聊天里的图全是 401）。
+      try {
+        document.cookie = 'lt_tok=' + encodeURIComponent(t || '')
+          + '; path=/; max-age=' + (t ? 60 * 60 * 24 * 30 : 0) + '; samesite=lax';
+      } catch (e) { /* noop */ }
+    }
+    function authHeaders() {
+      var h = { 'Content-Type': 'application/json' };
+      var t = getTok();
+      if (t) h.Authorization = 'Bearer ' + t;
+      return h;
+    }
+    function api(pathname, body) {
+      return fetch(API_BASE + pathname, {
+        method: body ? 'POST' : 'GET',
+        headers: authHeaders(),
+        body: body ? JSON.stringify(body) : undefined,
+      }).then(function (r) { return r.json(); })
+        .then(function (j) { return j || { error: { message: '空响应' } }; })
+        .catch(function (e) { return { error: { message: String(e && e.message || e) } }; });
+    }
+
+    /* ---------------- database：PostgREST 风格查询构建器 ---------------- */
+    // 链式调用只负责「攒计划」，真正的执行发生在 then/catch（即 q() 消费时）。
+    function qb(table) {
+      var st = { table: table, op: 'select', cols: '*', filters: [], order: null, limit: null, payload: null };
+      function run() {
+        return api('/api/db', st);
+      }
+      var b = {
+        select: function (c) { st.cols = c || '*'; return b; },
+        insert: function (o) { st.op = 'insert'; st.payload = o; st.cols = null; return b; },
+        upsert: function (o) { st.op = 'upsert'; st.payload = o; st.cols = null; return b; },
+        update: function (o) { st.op = 'update'; st.payload = o; st.cols = null; return b; },
+        delete: function () { st.op = 'delete'; st.cols = null; return b; },
+        eq: function (c, v) { st.filters.push(['eq', c, v]); return b; },
+        in: function (c, v) { st.filters.push(['in', c, v]); return b; },
+        gt: function (c, v) { st.filters.push(['gt', c, v]); return b; },
+        lt: function (c, v) { st.filters.push(['lt', c, v]); return b; },
+        order: function (c, o) { st.order = [c, !!(o && o.ascending)]; return b; },
+        limit: function (n) { st.limit = n; return b; },
+        then: function (a, r) { return run().then(a, r); },
+        catch: function (c) { return run().catch(c); },
+      };
+      if (typeof b.finally === 'undefined') {
+        b.finally = function (f) { return run().then(function (v) { f(); return v; }, function (e) { f(); throw e; }); };
+      }
+      return b;
+    }
+
+    /* ---------------- auth ---------------- */
+    var auth = {
+      sendOtp: function (o) {
+        return api('/api/auth/sendotp', { email: o.email }).then(function (r) {
+          if (r.error) return { error: r.error };
+          if (r.data && r.data.devCode) console.info('[lt] 验证码（未配 SMTP，开发回显）：' + r.data.devCode);
+          return { data: r.data };
+        });
+      },
+      verifyOtp: function (o) {
+        return api('/api/auth/verify', {
+          email: o.email, token: o.token, password: o.password || undefined,
+        }).then(function (r) {
+          if (r.error) return { error: r.error };
+          if (r.data && r.data.session) setTok(r.data.session.access_token);
+          return { data: r.data };
+        });
+      },
+      signInWithPassword: function (o) {
+        return api('/api/auth/password', { email: o.email, password: o.password }).then(function (r) {
+          if (r.error) return { error: r.error };
+          if (r.data && r.data.session) setTok(r.data.session.access_token);
+          return { data: r.data };
+        });
+      },
+      // ⚠️ 原平台：r.data 直接是 session 对象（有 .user.id），不是 {session}
+      getSession: function () {
+        return api('/api/auth/session').then(function (r) {
+          if (r.error) return { data: null, error: r.error };
+          var s = (r.data && r.data.session) || null;
+          if (s && s.access_token) setTok(s.access_token);
+          return { data: s };
+        });
+      },
+      getAccessToken: function () { return Promise.resolve(getTok()); },
+      signOut: function () {
+        setTok('');
+        return api('/api/auth/signout', {}).then(function () { return { data: {} }; });
+      },
+      resetPasswordForEmail: function (email) {
+        return api('/api/auth/reset', { email: email }).then(function (r) {
+          if (r.error) return { error: r.error };
+          if (r.data && r.data.devCode) console.info('[lt] 重置码（未配 SMTP，开发回显）：' + r.data.devCode);
+          return {
+            data: {
+              updateUser: function (o) {
+                return api('/api/auth/reset/confirm', { email: email, nonce: o.nonce, password: o.password })
+                  .then(function (r2) {
+                    if (r2.error) return { error: r2.error };
+                    if (r2.data && r2.data.session) setTok(r2.data.session.access_token);
+                    return { data: r2.data };
+                  });
+              },
+            },
+          };
+        });
+      },
+      onAuthStateChange: function () { return { data: { subscription: { unsubscribe: function () {} } } }; },
+    };
+
+    /* ---------------- storage ---------------- */
+    var storage = {
+      sharedPath: function (uid, sub) {
+        return String(uid) + '/' + String(sub || '').replace(/^\/+/, '');
+      },
+      update: function (p, file, opts) {
+        opts = opts || {};
+        var t = getTok();
+        return fetch(API_BASE + '/api/storage/upload?path=' + encodeURIComponent(p), {
+          method: 'POST',
+          headers: t ? { Authorization: 'Bearer ' + t } : {},
+          body: file,
+        }).then(function (r) { return r.json(); })
+          .then(function (j) { return j || { error: { message: '上传失败' } }; })
+          .catch(function (e) { return { error: { message: String(e && e.message || e) } }; });
+      },
+      exists: function (p) {
+        return api('/api/storage/stat?path=' + encodeURIComponent(p)).then(function (r) {
+          return { data: !!(r.data && r.data.exists), error: r.error };
+        });
+      },
+      info: function (p) {
+        return storage.exists(p).then(function (r) { return { data: { exists: !!r.data }, error: r.error }; });
+      },
+      // 自建没有签名 URL：图片走 /api/storage/f/<path>，靠 cookie 里的 lt_tok 鉴权
+      createSignedUrl: function (p) {
+        var u = API_BASE + '/api/storage/f/' + String(p).split('/').map(encodeURIComponent).join('/');
+        return Promise.resolve({ data: { signedUrl: u, url: u } });
+      },
+      remove: function () { return Promise.resolve({ data: {}, error: null }); },
+    };
+
+    wire_common({ auth: auth, database: { from: qb }, storage: storage });
+    console.info('[lt-shim] 精简自建模式（lite）已启用' + (API_BASE || '（同源）'));
+    return;
+  }
+
+  /* ==========================================================================
+   * 模式二：selfhost —— 自托管 Supabase
+   * ========================================================================*/
   if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
     console.error('[lt-shim] __LT_CONFIG__ 缺少 supabaseUrl / supabaseAnonKey，适配壳未启用');
     return;
@@ -170,74 +412,10 @@
       rpc: function (n, p) { return sb.rpc(n, p); },
     };
 
-    /* ---------------- llm ---------------- */
-    // 前端仅 botLLM 兜底路径用到；转发到自建 server.js 的 /api/llm/stream
-    function parseSSE(res, onDelta) {
-      return new Promise(function (resolve, reject) {
-        var reader = res.body.getReader();
-        var dec = new TextDecoder();
-        var buf = '';
-        (function pump() {
-          reader.read().then(function (r) {
-            if (r.done) return resolve();
-            buf += dec.decode(r.value, { stream: true });
-            var lines = buf.split('\n');
-            buf = lines.pop();
-            lines.forEach(function (ln) {
-              ln = ln.trim();
-              if (ln.indexOf('data:') !== 0) return;
-              var payload = ln.slice(5).trim();
-              if (payload === '[DONE]') return;
-              try { onDelta(JSON.parse(payload)); } catch (e) { /* 忽略心跳等非 JSON 行 */ }
-            });
-            pump();
-          }).catch(reject);
-        })();
-      });
-    }
-    var llm = {
-      models: {
-        list: function () {
-          return fetch(API_BASE + '/api/models')
-            .then(function (r) { return r.json(); })
-            .then(function (j) { return { data: (j && j.data) || [], error: null }; })
-            .catch(function (e) { return { data: [], error: e }; });
-        },
-      },
-      chat: {
-        completions: {
-          // 与原用法一致：async iterable，yield {choices:[{delta:{content}}]}
-          create: function (req) {
-            var it = (async function* () {
-              var res = await fetch(API_BASE + '/api/llm/stream', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  model: req.model,
-                  messages: req.messages,
-                  temperature: req.temperature,
-                }),
-                signal: req.signal,
-              });
-              if (!res.ok || !res.body) throw new Error('llm ' + res.status);
-              var queue = [];
-              await parseSSE(res, function (chunk) { queue.push(chunk); });
-              while (queue.length) yield queue.shift();
-            })();
-            return it;
-          },
-        },
-      },
-    };
-
     /* ---------------- 暴露 ---------------- */
-    window.WorkBuddyCloud = {
-      createWorkBuddyCloud: function () {
-        return { auth: auth, database: database, storage: storage, llm: llm, _selfhost: true };
-      },
-    };
-    window.__LT_SHIM_READY = true;
-    console.info('[lt-shim] 自托管适配壳已启用 → ' + cfg.supabaseUrl);
+    // llm 与 parseSSE 已提到两种模式共用的外层，这里只组装数据/鉴权/存储
+    wire_common({ auth: auth, database: database, storage: storage });
+    console.info('[lt-shim] 自托管 Supabase 模式（selfhost）已启用 → ' + cfg.supabaseUrl);
   }
 
   injectSupabase(wire);

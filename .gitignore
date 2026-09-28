@@ -25,6 +25,8 @@ cloud/assets/*.png
 cloud/.typesafe.json
 cloud/.deepseek.json
 cloud/.llm.json
+# ⚠️ 精简自建（lite）配置：含会话签名密钥 secret 与 SMTP 密码，绝不能入库
+cloud/.lite.json
 
 # 项目云盘迁移提示（内容为指向本 Git 仓库的说明，仅本地产物，已单独放到云盘）
 CODE_GOES_TO_GIT.md
